@@ -71,3 +71,50 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+
+## Supabase Library Sync (MVP)
+
+This project supports email/password auth and a `books` table in Supabase.
+
+Environment variables required in `.env`:
+
+```sh
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_PUBLISHABLE_KEY=your_anon_key
+```
+
+Create the `books` table and enable RLS:
+
+```sql
+create table if not exists public.books (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  author text not null,
+  genre text,
+  series_name text,
+  is_first_in_series boolean default false,
+  status text default 'want_to_read',
+  created_at timestamptz default now()
+);
+
+alter table public.books enable row level security;
+
+create policy "Users can read their own books"
+  on public.books for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert their own books"
+  on public.books for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update their own books"
+  on public.books for update
+  using (auth.uid() = user_id);
+
+create policy "Users can delete their own books"
+  on public.books for delete
+  using (auth.uid() = user_id);
+```
+
+Local storage is still used as a fallback when the user is not signed in.

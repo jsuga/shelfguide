@@ -21,14 +21,26 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <Navbar />
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="/library" element={<Library />} />
-            <Route path="/copilot" element={<Copilot />} />
-            <Route path="/preferences" element={<Preferences />} />
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
+          <div className="min-h-screen flex flex-col">
+            <div className="flex-1">
+              <Routes>
+                <Route path="/" element={<Index />} />
+                <Route path="/library" element={<Library />} />
+                <Route path="/copilot" element={<Copilot />} />
+                <Route path="/preferences" element={<Preferences />} />
+                {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </div>
+            <footer className="py-8 border-t border-border/50">
+              <div className="container mx-auto px-4 text-center text-sm text-muted-foreground font-body">
+                <p>
+                  Your Next Chapter — AI-powered book recommendations. Built with love
+                  for readers.
+                </p>
+              </div>
+            </footer>
+          </div>
         </BrowserRouter>
       </TooltipProvider>
     </ThemeProvider>

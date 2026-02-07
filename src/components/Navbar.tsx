@@ -9,6 +9,11 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 const navLinks = [
   { path: "/", label: "Home" },
@@ -20,6 +25,60 @@ const navLinks = [
 const Navbar = () => {
   const location = useLocation();
   const [open, setOpen] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<"sign_in" | "sign_up">("sign_up");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authUsername, setAuthUsername] = useState("");
+
+  const handleAuth = async () => {
+    if (!authEmail || !authPassword) {
+      toast.error("Enter an email and password.");
+      return;
+    }
+    if (authMode === "sign_up") {
+      if (!authUsername.trim()) {
+        toast.error("Enter a username.");
+        return;
+      }
+      const { error } = await supabase.auth.signUp({
+        email: authEmail,
+        password: authPassword,
+        options: {
+          data: { username: authUsername.trim() },
+        },
+      });
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      toast.success("Account created. Check your email to confirm.");
+      setAuthOpen(false);
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: authEmail,
+      password: authPassword,
+    });
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    toast.success("Signed in.");
+    setAuthOpen(false);
+  };
+
+  const handleSocialAuth = async (provider: "google" | "apple") => {
+    const redirectTo = window.location.origin;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo },
+    });
+    if (error) {
+      toast.error(error.message);
+    }
+  };
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-lg">
@@ -30,7 +89,7 @@ const Navbar = () => {
           className="flex items-center gap-2 font-display text-xl font-bold tracking-tight"
         >
           <BookOpen className="w-6 h-6 text-primary" />
-          <span>Reading Copilot</span>
+          <span>Your Next Chapter</span>
         </Link>
 
         {/* Desktop links */}
@@ -45,6 +104,14 @@ const Navbar = () => {
               <Link to={link.path}>{link.label}</Link>
             </Button>
           ))}
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-2"
+            onClick={() => setAuthOpen(true)}
+          >
+            Sign in
+          </Button>
         </div>
 
         {/* Mobile menu */}
@@ -73,10 +140,114 @@ const Navbar = () => {
                   <Link to={link.path}>{link.label}</Link>
                 </Button>
               ))}
+              <Button
+                variant="outline"
+                className="justify-start mt-2"
+                onClick={() => {
+                  setOpen(false);
+                  setAuthOpen(true);
+                }}
+              >
+                Sign in
+              </Button>
             </div>
           </SheetContent>
         </Sheet>
       </nav>
+
+      <Dialog open={authOpen} onOpenChange={setAuthOpen}>
+        <DialogContent className="max-w-lg border border-border/60 bg-card/95 p-0">
+          <div className="rounded-2xl overflow-hidden">
+            <div className="px-8 py-6 bg-secondary/40 border-b border-border/60">
+              <DialogHeader>
+                <DialogTitle className="font-display text-2xl">
+                  Save Your Library
+                </DialogTitle>
+              </DialogHeader>
+              <p className="text-sm text-muted-foreground font-body mt-2">
+                Create an account to sync your books across devices.
+              </p>
+            </div>
+
+            <div className="px-8 py-6 grid gap-4">
+              <div className="grid gap-2">
+                <Button variant="outline" onClick={() => handleSocialAuth("google")}>
+                  Continue with Google
+                </Button>
+                <Button variant="outline" onClick={() => handleSocialAuth("apple")}>
+                  Continue with Apple
+                </Button>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className="h-px flex-1 bg-border" />
+                <span className="text-xs text-muted-foreground">or</span>
+                <span className="h-px flex-1 bg-border" />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={authMode === "sign_up" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setAuthMode("sign_up")}
+                >
+                  Create account
+                </Button>
+                <Button
+                  variant={authMode === "sign_in" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setAuthMode("sign_in")}
+                >
+                  Sign in
+                </Button>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="auth-email">Email</Label>
+                <Input
+                  id="auth-email"
+                  type="email"
+                  value={authEmail}
+                  onChange={(event) => setAuthEmail(event.target.value)}
+                  placeholder="reader@example.com"
+                />
+              </div>
+
+              {authMode === "sign_up" && (
+                <div className="grid gap-2">
+                  <Label htmlFor="auth-username">Username</Label>
+                  <Input
+                    id="auth-username"
+                    value={authUsername}
+                    onChange={(event) => setAuthUsername(event.target.value)}
+                    placeholder="chapterSeeker"
+                  />
+                </div>
+              )}
+
+              <div className="grid gap-2">
+                <Label htmlFor="auth-password">Password</Label>
+                <Input
+                  id="auth-password"
+                  type="password"
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                  placeholder="At least 8 characters"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3">
+                <Button variant="outline" onClick={() => setAuthOpen(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={handleAuth}>
+                  {authMode === "sign_up" ? "Create account" : "Sign in"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </header>
   );
 };

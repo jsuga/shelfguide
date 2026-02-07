@@ -21,6 +21,8 @@ const themeCards: {
   name: string;
   description: string;
   colors: { bg: string; primary: string; accent: string };
+  images: [string, string, string];
+  detail: string;
 }[] = [
   {
     id: "fantasy",
@@ -31,6 +33,12 @@ const themeCards: {
       primary: "hsl(42,80%,52%)",
       accent: "hsl(150,30%,16%)",
     },
+    images: [
+      "/images/themes/fantasy1.jpg",
+      "/images/themes/fantasy2.jpg",
+      "/images/themes/fantasy3.jpg",
+    ],
+    detail: "Mossy glades, runes, and torchlit stonework.",
   },
   {
     id: "scifi",
@@ -41,6 +49,12 @@ const themeCards: {
       primary: "hsl(195,90%,50%)",
       accent: "hsl(225,35%,15%)",
     },
+    images: [
+      "/images/themes/scifi1.jpg",
+      "/images/themes/scifi2.jpg",
+      "/images/themes/scifi3.jpg",
+    ],
+    detail: "Neon corridors, holograms, and orbital glow.",
   },
   {
     id: "history",
@@ -51,6 +65,12 @@ const themeCards: {
       primary: "hsl(30,55%,38%)",
       accent: "hsl(30,25%,82%)",
     },
+    images: [
+      "/images/themes/history1.jpg",
+      "/images/themes/history3.png",
+      "/images/themes/history1.jpg",
+    ],
+    detail: "Cartography lines, vellum texture, and inked edges.",
   },
   {
     id: "romance",
@@ -61,6 +81,12 @@ const themeCards: {
       primary: "hsl(345,50%,52%)",
       accent: "hsl(345,25%,88%)",
     },
+    images: [
+      "/images/themes/romance1.jpg",
+      "/images/themes/romance2.jpg",
+      "/images/themes/romance3.jpg",
+    ],
+    detail: "Petals, handwritten notes, and golden hour light.",
   },
   {
     id: "thriller",
@@ -71,6 +97,12 @@ const themeCards: {
       primary: "hsl(0,75%,48%)",
       accent: "hsl(0,0%,14%)",
     },
+    images: [
+      "/images/themes/thriller1.jpg",
+      "/images/themes/thriller3.jpg",
+      "/images/themes/thriller1.jpg",
+    ],
+    detail: "Hard shadows, gritty tape, and cold evidence boards.",
   },
 ];
 
@@ -129,11 +161,13 @@ const Index = () => {
   const { theme, setTheme } = useTheme();
 
   return (
-    <main className="pt-16">
+    <main className="pt-16 theme-page">
       {/* ═══ Hero ═══ */}
       <section className="relative min-h-[90vh] flex items-center justify-center overflow-hidden">
         {/* Decorative blobs */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute inset-0 theme-hero-image" />
+          <div className="absolute inset-0 theme-hero-vignette" />
           <motion.div
             className="absolute top-20 left-[10%] w-72 h-72 rounded-full bg-primary/10 blur-3xl"
             animate={{ y: [0, -20, 0], scale: [1, 1.1, 1] }}
@@ -267,63 +301,6 @@ const Index = () => {
         </div>
       </section>
 
-      {/* ═══ Theme Showcase ═══ */}
-      <section className="py-24 bg-secondary/30">
-        <div className="container mx-auto px-4">
-          <motion.div {...fadeInUp} className="text-center mb-16">
-            <h2 className="font-display text-3xl md:text-5xl font-bold mb-4">
-              Choose Your Atmosphere
-            </h2>
-            <p className="text-muted-foreground text-lg max-w-xl mx-auto font-body">
-              Each genre transforms the entire reading experience
-            </p>
-          </motion.div>
-
-          <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4 max-w-6xl mx-auto">
-            {themeCards.map((t, i) => (
-              <motion.div
-                key={t.id}
-                {...fadeInUp}
-                transition={{ duration: 0.5, delay: i * 0.1 }}
-              >
-                <button
-                  onClick={() => {
-                    setTheme(t.id);
-                    toast.success(`${t.name} theme applied!`);
-                  }}
-                  className={`w-full text-left rounded-xl overflow-hidden border-2 transition-all hover:scale-[1.03] ${
-                    theme === t.id
-                      ? "border-primary shadow-lg ring-2 ring-primary/30"
-                      : "border-transparent hover:border-border"
-                  }`}
-                >
-                  {/* Color preview bar */}
-                  <div
-                    className="h-24 relative"
-                    style={{
-                      background: `linear-gradient(135deg, ${t.colors.bg}, ${t.colors.accent})`,
-                    }}
-                  >
-                    <div
-                      className="absolute bottom-2 right-2 w-8 h-8 rounded-full shadow-md"
-                      style={{ background: t.colors.primary }}
-                    />
-                  </div>
-                  <div className="p-3 bg-card">
-                    <h3 className="font-display font-bold text-sm">
-                      {t.name}
-                    </h3>
-                    <p className="text-xs text-muted-foreground mt-1 font-body">
-                      {t.description}
-                    </p>
-                  </div>
-                </button>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* ═══ Final CTA ═══ */}
       <section className="py-24">
         <div className="container mx-auto px-4 text-center">
@@ -343,15 +320,6 @@ const Index = () => {
         </div>
       </section>
 
-      {/* ═══ Footer ═══ */}
-      <footer className="py-8 border-t border-border/50">
-        <div className="container mx-auto px-4 text-center text-sm text-muted-foreground font-body">
-          <p>
-            Reading Copilot — AI-powered book recommendations. Built with love
-            for readers.
-          </p>
-        </div>
-      </footer>
     </main>
   );
 };

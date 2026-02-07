@@ -16,6 +16,8 @@
   [data-theme="default"] {
     --font-display: 'DM Serif Display', serif;
     --font-body: 'DM Sans', sans-serif;
+    --theme-hero-image: none;
+    --theme-backdrop-image: none;
 
     --background: 40 30% 97%;
     --foreground: 30 20% 12%;
@@ -52,6 +54,8 @@
   [data-theme="fantasy"] {
     --font-display: 'Cinzel', serif;
     --font-body: 'Lora', serif;
+    --theme-hero-image: url("/images/themes/fantasy1.jpg");
+    --theme-backdrop-image: url("/images/themes/fantasy2.jpg");
 
     --background: 140 25% 8%;
     --foreground: 45 35% 88%;
@@ -87,6 +91,8 @@
   [data-theme="scifi"] {
     --font-display: 'Space Grotesk', sans-serif;
     --font-body: 'Space Grotesk', sans-serif;
+    --theme-hero-image: url("/images/themes/scifi2.jpg");
+    --theme-backdrop-image: url("/images/themes/scifi1.jpg");
 
     --background: 225 50% 6%;
     --foreground: 210 25% 88%;
@@ -122,6 +128,8 @@
   [data-theme="history"] {
     --font-display: 'Playfair Display', serif;
     --font-body: 'Source Serif 4', serif;
+    --theme-hero-image: url("/images/themes/history1.jpg");
+    --theme-backdrop-image: url("/images/themes/history3.png");
 
     --background: 35 35% 92%;
     --foreground: 25 40% 18%;
@@ -157,6 +165,8 @@
   [data-theme="romance"] {
     --font-display: 'Cormorant Garamond', serif;
     --font-body: 'Lora', serif;
+    --theme-hero-image: url("/images/themes/romance2.jpg");
+    --theme-backdrop-image: url("/images/themes/romance1.jpg");
 
     --background: 20 35% 96%;
     --foreground: 340 25% 22%;
@@ -192,6 +202,8 @@
   [data-theme="thriller"] {
     --font-display: 'Oswald', sans-serif;
     --font-body: 'DM Sans', sans-serif;
+    --theme-hero-image: url("/images/themes/thriller1.jpg");
+    --theme-backdrop-image: url("/images/themes/thriller3.jpg");
 
     --background: 0 0% 5%;
     --foreground: 0 0% 92%;
@@ -231,6 +243,51 @@
     @apply bg-background text-foreground;
     font-family: var(--font-body);
     transition: background-color 0.4s ease, color 0.4s ease;
+  }
+
+  .theme-hero-image {
+    background-image: var(--theme-hero-image);
+    background-size: cover;
+    background-position: center;
+    opacity: 0.18;
+    filter: saturate(1.1) contrast(1.05);
+  }
+
+  .theme-hero-vignette {
+    background:
+      radial-gradient(circle at 20% 20%, hsl(var(--primary) / 0.15), transparent 45%),
+      radial-gradient(circle at 80% 10%, hsl(var(--primary) / 0.12), transparent 40%),
+      linear-gradient(180deg, hsl(var(--background) / 0.9), hsl(var(--background) / 0.65) 55%, hsl(var(--background) / 0.95));
+  }
+
+  .theme-page {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .theme-page::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    background-image:
+      radial-gradient(circle at 10% 10%, hsl(var(--primary) / 0.18), transparent 45%),
+      radial-gradient(circle at 90% 20%, hsl(var(--accent) / 0.16), transparent 40%),
+      linear-gradient(180deg, hsl(var(--background) / 0.98), hsl(var(--background) / 0.92));
+  }
+
+  .theme-page::after {
+    content: "";
+    position: fixed;
+    inset: -10%;
+    z-index: -1;
+    background-image: var(--theme-backdrop-image);
+    background-size: cover;
+    background-position: center;
+    opacity: 0.28;
+    filter: saturate(1.25) contrast(1.1);
+    mix-blend-mode: multiply;
+    pointer-events: none;
   }
 
   h1, h2, h3, h4, h5, h6 {
