@@ -1,105 +1,239 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cormorant+Garamond:wght@400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=DM+Serif+Display&family=Lora:ital,wght@0,400..700;1,400..700&family=Oswald:wght@200..700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&family=Space+Grotesk:wght@300..700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
+/* ═══════════════════════════════════════════════════
+   READING COPILOT — Genre-Based Theme System
+   All colors in HSL. Themes applied via [data-theme] 
+   on <html>. Font vars drive display/body typography.
+   ═══════════════════════════════════════════════════ */
 
 @layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+  /* ─── Default: Warm Bookish ─── */
+  :root,
+  [data-theme="default"] {
+    --font-display: 'DM Serif Display', serif;
+    --font-body: 'DM Sans', sans-serif;
 
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-
+    --background: 40 30% 97%;
+    --foreground: 30 20% 12%;
+    --card: 40 25% 94%;
+    --card-foreground: 30 20% 12%;
+    --popover: 40 25% 94%;
+    --popover-foreground: 30 20% 12%;
+    --primary: 28 70% 44%;
+    --primary-foreground: 40 30% 97%;
+    --secondary: 35 25% 90%;
+    --secondary-foreground: 30 20% 20%;
+    --muted: 35 20% 92%;
+    --muted-foreground: 30 15% 45%;
+    --accent: 28 60% 50%;
+    --accent-foreground: 40 30% 97%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 30 20% 88%;
+    --input: 30 20% 88%;
+    --ring: 28 70% 44%;
     --radius: 0.5rem;
 
-    --sidebar-background: 0 0% 98%;
-
-    --sidebar-foreground: 240 5.3% 26.1%;
-
-    --sidebar-primary: 240 5.9% 10%;
-
-    --sidebar-primary-foreground: 0 0% 98%;
-
-    --sidebar-accent: 240 4.8% 95.9%;
-
-    --sidebar-accent-foreground: 240 5.9% 10%;
-
-    --sidebar-border: 220 13% 91%;
-
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-background: 40 25% 95%;
+    --sidebar-foreground: 30 20% 20%;
+    --sidebar-primary: 28 70% 44%;
+    --sidebar-primary-foreground: 40 30% 97%;
+    --sidebar-accent: 35 25% 90%;
+    --sidebar-accent-foreground: 30 20% 20%;
+    --sidebar-border: 30 20% 88%;
+    --sidebar-ring: 28 70% 44%;
   }
 
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
+  /* ─── Fantasy: Enchanted Forest ─── */
+  [data-theme="fantasy"] {
+    --font-display: 'Cinzel', serif;
+    --font-body: 'Lora', serif;
 
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
+    --background: 140 25% 8%;
+    --foreground: 45 35% 88%;
+    --card: 140 20% 12%;
+    --card-foreground: 45 35% 88%;
+    --popover: 140 20% 12%;
+    --popover-foreground: 45 35% 88%;
+    --primary: 42 80% 52%;
+    --primary-foreground: 140 25% 8%;
+    --secondary: 150 30% 16%;
+    --secondary-foreground: 45 35% 85%;
+    --muted: 140 18% 15%;
+    --muted-foreground: 45 15% 55%;
+    --accent: 42 70% 45%;
+    --accent-foreground: 140 25% 8%;
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 45 35% 88%;
+    --border: 140 15% 18%;
+    --input: 140 15% 18%;
+    --ring: 42 80% 52%;
 
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-background: 140 20% 10%;
+    --sidebar-foreground: 45 35% 85%;
+    --sidebar-primary: 42 80% 52%;
+    --sidebar-primary-foreground: 140 25% 8%;
+    --sidebar-accent: 150 30% 16%;
+    --sidebar-accent-foreground: 45 35% 85%;
+    --sidebar-border: 140 15% 18%;
+    --sidebar-ring: 42 80% 52%;
   }
-}
 
-@layer base {
+  /* ─── Sci-Fi: Space Station ─── */
+  [data-theme="scifi"] {
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-body: 'Space Grotesk', sans-serif;
+
+    --background: 225 50% 6%;
+    --foreground: 210 25% 88%;
+    --card: 225 45% 10%;
+    --card-foreground: 210 25% 88%;
+    --popover: 225 45% 10%;
+    --popover-foreground: 210 25% 88%;
+    --primary: 195 90% 50%;
+    --primary-foreground: 225 50% 6%;
+    --secondary: 225 35% 15%;
+    --secondary-foreground: 210 25% 85%;
+    --muted: 225 30% 13%;
+    --muted-foreground: 210 15% 55%;
+    --accent: 195 80% 42%;
+    --accent-foreground: 225 50% 6%;
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 210 25% 88%;
+    --border: 225 30% 16%;
+    --input: 225 30% 16%;
+    --ring: 195 90% 50%;
+
+    --sidebar-background: 225 45% 8%;
+    --sidebar-foreground: 210 25% 85%;
+    --sidebar-primary: 195 90% 50%;
+    --sidebar-primary-foreground: 225 50% 6%;
+    --sidebar-accent: 225 35% 15%;
+    --sidebar-accent-foreground: 210 25% 85%;
+    --sidebar-border: 225 30% 16%;
+    --sidebar-ring: 195 90% 50%;
+  }
+
+  /* ─── History: Antique Maps ─── */
+  [data-theme="history"] {
+    --font-display: 'Playfair Display', serif;
+    --font-body: 'Source Serif 4', serif;
+
+    --background: 35 35% 92%;
+    --foreground: 25 40% 18%;
+    --card: 35 30% 88%;
+    --card-foreground: 25 40% 18%;
+    --popover: 35 30% 88%;
+    --popover-foreground: 25 40% 18%;
+    --primary: 30 55% 38%;
+    --primary-foreground: 35 35% 95%;
+    --secondary: 30 25% 82%;
+    --secondary-foreground: 25 40% 20%;
+    --muted: 30 20% 85%;
+    --muted-foreground: 25 20% 45%;
+    --accent: 30 50% 42%;
+    --accent-foreground: 35 35% 95%;
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 35 35% 95%;
+    --border: 30 20% 80%;
+    --input: 30 20% 80%;
+    --ring: 30 55% 38%;
+
+    --sidebar-background: 35 30% 90%;
+    --sidebar-foreground: 25 40% 20%;
+    --sidebar-primary: 30 55% 38%;
+    --sidebar-primary-foreground: 35 35% 95%;
+    --sidebar-accent: 30 25% 82%;
+    --sidebar-accent-foreground: 25 40% 20%;
+    --sidebar-border: 30 20% 80%;
+    --sidebar-ring: 30 55% 38%;
+  }
+
+  /* ─── Romance: Parisian Garden ─── */
+  [data-theme="romance"] {
+    --font-display: 'Cormorant Garamond', serif;
+    --font-body: 'Lora', serif;
+
+    --background: 20 35% 96%;
+    --foreground: 340 25% 22%;
+    --card: 20 30% 93%;
+    --card-foreground: 340 25% 22%;
+    --popover: 20 30% 93%;
+    --popover-foreground: 340 25% 22%;
+    --primary: 345 50% 52%;
+    --primary-foreground: 20 35% 97%;
+    --secondary: 345 25% 88%;
+    --secondary-foreground: 340 25% 25%;
+    --muted: 20 20% 90%;
+    --muted-foreground: 340 15% 48%;
+    --accent: 345 45% 48%;
+    --accent-foreground: 20 35% 97%;
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 20 35% 97%;
+    --border: 345 18% 85%;
+    --input: 345 18% 85%;
+    --ring: 345 50% 52%;
+
+    --sidebar-background: 20 30% 94%;
+    --sidebar-foreground: 340 25% 25%;
+    --sidebar-primary: 345 50% 52%;
+    --sidebar-primary-foreground: 20 35% 97%;
+    --sidebar-accent: 345 25% 88%;
+    --sidebar-accent-foreground: 340 25% 25%;
+    --sidebar-border: 345 18% 85%;
+    --sidebar-ring: 345 50% 52%;
+  }
+
+  /* ─── Thriller: Evidence Board ─── */
+  [data-theme="thriller"] {
+    --font-display: 'Oswald', sans-serif;
+    --font-body: 'DM Sans', sans-serif;
+
+    --background: 0 0% 5%;
+    --foreground: 0 0% 92%;
+    --card: 0 0% 9%;
+    --card-foreground: 0 0% 92%;
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 92%;
+    --primary: 0 75% 48%;
+    --primary-foreground: 0 0% 95%;
+    --secondary: 0 0% 14%;
+    --secondary-foreground: 0 0% 88%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 55%;
+    --accent: 0 70% 42%;
+    --accent-foreground: 0 0% 95%;
+    --destructive: 0 90% 40%;
+    --destructive-foreground: 0 0% 95%;
+    --border: 0 0% 16%;
+    --input: 0 0% 16%;
+    --ring: 0 75% 48%;
+
+    --sidebar-background: 0 0% 7%;
+    --sidebar-foreground: 0 0% 88%;
+    --sidebar-primary: 0 75% 48%;
+    --sidebar-primary-foreground: 0 0% 95%;
+    --sidebar-accent: 0 0% 14%;
+    --sidebar-accent-foreground: 0 0% 88%;
+    --sidebar-border: 0 0% 16%;
+    --sidebar-ring: 0 75% 48%;
+  }
+
   * {
     @apply border-border;
   }
 
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-body);
+    transition: background-color 0.4s ease, color 0.4s ease;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
   }
 }
