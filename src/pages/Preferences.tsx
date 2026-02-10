@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Palette } from "lucide-react";
-import { useTheme, type GenreTheme } from "@/contexts/ThemeContext";
-import { toast } from "sonner";
+import { useTheme } from "@/contexts/ThemeContext";
+import type { GenreTheme } from "@/contexts/theme-types";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 
 const themeCards: {
@@ -111,6 +113,21 @@ const Preferences = () => {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [saving, setSaving] = useState(false);
+  const [preferredGenres, setPreferredGenres] = useState("");
+  const [avoidedGenres, setAvoidedGenres] = useState("");
+  const [preferredFormats, setPreferredFormats] = useState("");
+  const [preferredPace, setPreferredPace] = useState<string | null>(null);
+  const [notes, setNotes] = useState("");
+  const [savingPrefs, setSavingPrefs] = useState(false);
+
+  const parseList = (value: string) =>
+    value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+  const listToString = (value: string[] | null | undefined) =>
+    Array.isArray(value) ? value.join(", ") : "";
 
   useEffect(() => {
     const init = async () => {
@@ -119,6 +136,20 @@ const Preferences = () => {
       setUserEmail(user?.email ?? null);
       const storedUsername = (user?.user_metadata as { username?: string })?.username || "";
       setUsername(storedUsername);
+      if (user?.id) {
+        const { data: prefs } = await supabase
+          .from("copilot_preferences")
+          .select("*")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (prefs) {
+          setPreferredGenres(listToString(prefs.preferred_genres));
+          setAvoidedGenres(listToString(prefs.avoided_genres));
+          setPreferredFormats(listToString(prefs.preferred_formats));
+          setPreferredPace(prefs.preferred_pace ?? null);
+          setNotes(prefs.notes ?? "");
+        }
+      }
     };
     void init();
 
@@ -127,6 +158,22 @@ const Preferences = () => {
       setUserEmail(user?.email ?? null);
       const storedUsername = (user?.user_metadata as { username?: string })?.username || "";
       setUsername(storedUsername);
+      if (user?.id) {
+        (async () => {
+          const { data: prefs } = await supabase
+            .from("copilot_preferences")
+            .select("*")
+            .eq("user_id", user.id)
+            .maybeSingle();
+          if (prefs) {
+            setPreferredGenres(listToString(prefs.preferred_genres));
+            setAvoidedGenres(listToString(prefs.avoided_genres));
+            setPreferredFormats(listToString(prefs.preferred_formats));
+            setPreferredPace(prefs.preferred_pace ?? null);
+            setNotes(prefs.notes ?? "");
+          }
+        })();
+      }
     });
 
     return () => {
@@ -149,6 +196,38 @@ const Preferences = () => {
       return;
     }
     toast.success("Username updated.");
+  };
+
+  const handleSavePreferences = async () => {
+    if (!userEmail) {
+      toast.error("Sign in to save preferences.");
+      return;
+    }
+    setSavingPrefs(true);
+    const { data } = await supabase.auth.getSession();
+    const user = data.session?.user ?? null;
+    if (!user?.id) {
+      toast.error("Sign in to save preferences.");
+      setSavingPrefs(false);
+      return;
+    }
+    const { error } = await supabase
+      .from("copilot_preferences")
+      .upsert({
+        user_id: user.id,
+        preferred_genres: parseList(preferredGenres),
+        avoided_genres: parseList(avoidedGenres),
+        preferred_formats: parseList(preferredFormats),
+        preferred_pace: preferredPace,
+        notes: notes.trim() || null,
+        updated_at: new Date().toISOString(),
+      });
+    setSavingPrefs(false);
+    if (error) {
+      toast.error("Could not save preferences.");
+      return;
+    }
+    toast.success("Preferences updated.");
   };
 
   return (
@@ -194,15 +273,78 @@ const Preferences = () => {
           )}
         </section>
 
-        <section className="flex flex-col items-center justify-center py-12 text-center rounded-xl border border-dashed border-border/60">
-          <Palette className="w-16 h-16 text-muted-foreground/30 mb-4" />
-          <h2 className="font-display text-2xl font-bold mb-2">
-            More preferences coming soon
-          </h2>
-          <p className="text-muted-foreground max-w-md font-body">
-            Choose your genre theme, manage reading preferences, and review your
-            feedback history.
+        <section className="rounded-xl border border-border/60 bg-card/70 p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <Palette className="w-5 h-5 text-primary" />
+            <h2 className="font-display text-2xl font-bold">Reading Preferences</h2>
+          </div>
+          <p className="text-sm text-muted-foreground font-body mb-6">
+            These signals guide the copilot and stay private to your account.
           </p>
+          {userEmail ? (
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="preferred-genres">Preferred genres</Label>
+                <Input
+                  id="preferred-genres"
+                  value={preferredGenres}
+                  onChange={(event) => setPreferredGenres(event.target.value)}
+                  placeholder="Fantasy, Science Fiction, Cozy Mystery"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="avoided-genres">Avoided genres</Label>
+                <Input
+                  id="avoided-genres"
+                  value={avoidedGenres}
+                  onChange={(event) => setAvoidedGenres(event.target.value)}
+                  placeholder="Horror, True Crime"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="preferred-formats">Preferred formats</Label>
+                <Input
+                  id="preferred-formats"
+                  value={preferredFormats}
+                  onChange={(event) => setPreferredFormats(event.target.value)}
+                  placeholder="Audiobook, Hardcover, Ebook"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Reading pace</Label>
+                <Select value={preferredPace ?? ""} onValueChange={(value) => setPreferredPace(value || null)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select pace" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="slow">Slow and immersive</SelectItem>
+                    <SelectItem value="steady">Steady</SelectItem>
+                    <SelectItem value="fast">Fast and bingeable</SelectItem>
+                    <SelectItem value="no_preference">No preference</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="notes">Anything else?</Label>
+                <Textarea
+                  id="notes"
+                  value={notes}
+                  onChange={(event) => setNotes(event.target.value)}
+                  placeholder="Examples: shorter standalone books, diverse authors, minimal gore."
+                  className="min-h-[90px]"
+                />
+              </div>
+              <div className="flex items-center justify-end">
+                <Button onClick={handleSavePreferences} disabled={savingPrefs}>
+                  {savingPrefs ? "Saving..." : "Save preferences"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground font-body">
+              Sign in to save your reading preferences.
+            </p>
+          )}
         </section>
       </div>
 

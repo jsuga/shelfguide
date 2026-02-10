@@ -11,7 +11,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Link } from "react-router-dom";
-import { useTheme, type GenreTheme } from "@/contexts/ThemeContext";
+import { useTheme } from "@/contexts/ThemeContext";
+import type { GenreTheme } from "@/contexts/theme-types";
 import { toast } from "sonner";
 
 /* ── Static data ── */
@@ -132,7 +133,7 @@ const features = [
     icon: Palette,
     title: "Genre-Based Theming",
     description:
-      "Transform the entire interface to match your reading mood — from enchanted forests to noir thrillers.",
+      "Transform the entire interface to match your reading mood - from enchanted forests to noir thrillers.",
   },
   {
     icon: Sparkles,
@@ -199,7 +200,7 @@ const Index = () => {
 
             <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-10 font-body">
               Build your personal library, chat with an intelligent copilot, and
-              discover your next great read — with recommendations that actually
+              discover your next great read - with recommendations that actually
               understand you.
             </p>
 

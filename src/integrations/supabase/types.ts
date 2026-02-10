@@ -14,7 +14,181 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      books: {
+        Row: {
+          id: string
+          user_id: string
+          title: string
+          author: string
+          genre: string | null
+          series_name: string | null
+          is_first_in_series: boolean | null
+          status: string | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          title: string
+          author: string
+          genre?: string | null
+          series_name?: string | null
+          is_first_in_series?: boolean | null
+          status?: string | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          title?: string
+          author?: string
+          genre?: string | null
+          series_name?: string | null
+          is_first_in_series?: boolean | null
+          status?: string | null
+          created_at?: string | null
+        }
+      }
+      copilot_preferences: {
+        Row: {
+          user_id: string
+          preferred_genres: string[]
+          avoided_genres: string[]
+          preferred_pace: string | null
+          preferred_formats: string[]
+          notes: string | null
+          updated_at: string
+        }
+        Insert: {
+          user_id: string
+          preferred_genres?: string[]
+          avoided_genres?: string[]
+          preferred_pace?: string | null
+          preferred_formats?: string[]
+          notes?: string | null
+          updated_at?: string
+        }
+        Update: {
+          user_id?: string
+          preferred_genres?: string[]
+          avoided_genres?: string[]
+          preferred_pace?: string | null
+          preferred_formats?: string[]
+          notes?: string | null
+          updated_at?: string
+        }
+      }
+      copilot_feedback: {
+        Row: {
+          id: string
+          user_id: string
+          book_id: string | null
+          title: string
+          author: string | null
+          genre: string | null
+          tags: string[]
+          decision: string
+          reason: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          book_id?: string | null
+          title: string
+          author?: string | null
+          genre?: string | null
+          tags?: string[]
+          decision: string
+          reason?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          book_id?: string | null
+          title?: string
+          author?: string | null
+          genre?: string | null
+          tags?: string[]
+          decision?: string
+          reason?: string | null
+          created_at?: string
+        }
+      }
+      copilot_recommendations: {
+        Row: {
+          id: string
+          user_id: string
+          book_id: string | null
+          title: string
+          author: string | null
+          genre: string | null
+          tags: string[]
+          summary: string | null
+          source: string | null
+          reasons: string[]
+          why_new: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          book_id?: string | null
+          title: string
+          author?: string | null
+          genre?: string | null
+          tags?: string[]
+          summary?: string | null
+          source?: string | null
+          reasons?: string[]
+          why_new?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          book_id?: string | null
+          title?: string
+          author?: string | null
+          genre?: string | null
+          tags?: string[]
+          summary?: string | null
+          source?: string | null
+          reasons?: string[]
+          why_new?: string | null
+          created_at?: string
+        }
+      }
+      copilot_rate_limits: {
+        Row: {
+          id: string
+          key: string
+          user_id: string | null
+          ip: string | null
+          window_start: string
+          count: number
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          key: string
+          user_id?: string | null
+          ip?: string | null
+          window_start: string
+          count?: number
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          key?: string
+          user_id?: string | null
+          ip?: string | null
+          window_start?: string
+          count?: number
+          updated_at?: string
+        }
+      }
     }
     Views: {
       [_ in never]: never

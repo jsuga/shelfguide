@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BookMarked } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -53,13 +53,13 @@ const Library = () => {
     localStorage.setItem("reading-copilot-library", JSON.stringify(nextBooks));
   };
 
-  const loadBooks = async (userIdValue: string | null) => {
+  const loadBooks = useCallback(async (userIdValue: string | null) => {
     if (!userIdValue) {
       setBooks(getLocalBooks());
       return;
     }
     setLoadingBooks(true);
-    const { data, error } = await (supabase as any)
+    const { data, error } = await supabase
       .from("books")
       .select("*")
       .eq("user_id", userIdValue)
@@ -77,12 +77,12 @@ const Library = () => {
 
     const localBooks = getLocalBooks();
     if (cloudBooks.length === 0 && localBooks.length > 0 && userIdValue) {
-      const { error: insertError } = await (supabase as any)
+      const { error: insertError } = await supabase
         .from("books")
         .insert(localBooks.map((book) => ({ ...book, user_id: userIdValue })));
       if (!insertError) {
         setLocalBooks([]);
-        const { data: refreshed } = await (supabase as any)
+        const { data: refreshed } = await supabase
           .from("books")
           .select("*")
           .eq("user_id", userIdValue)
@@ -91,7 +91,7 @@ const Library = () => {
         toast.success("Migrated your local library to the cloud.");
       }
     }
-  };
+  }, []);
 
   useEffect(() => {
     const init = async () => {
@@ -116,7 +116,7 @@ const Library = () => {
     return () => {
       listener.subscription.unsubscribe();
     };
-  }, []);
+  }, [loadBooks]);
 
 
   const codeSnippet = useMemo(() => {
@@ -163,7 +163,7 @@ const Library = () => {
 
     if (userId && target?.id) {
       (async () => {
-        const { error } = await (supabase as any)
+        const { error } = await supabase
           .from("books")
           .update(updatedBook)
           .eq("id", target.id);
@@ -191,7 +191,7 @@ const Library = () => {
     const target = books[index];
     if (userId && target?.id) {
       (async () => {
-        const { error } = await (supabase as any)
+        const { error } = await supabase
           .from("books")
           .delete()
           .eq("id", target.id);
@@ -306,7 +306,7 @@ const Library = () => {
     if (userId) {
       const { data: userData } = await supabase.auth.getUser();
       const userId = userData.user?.id;
-      const { error } = await (supabase as any)
+      const { error } = await supabase
         .from("books")
         .insert(booksFromCsv.map((book) => ({ ...book, user_id: userId })));
       if (error) {

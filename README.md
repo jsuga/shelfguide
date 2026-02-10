@@ -118,3 +118,58 @@ create policy "Users can delete their own books"
 ```
 
 Local storage is still used as a fallback when the user is not signed in.
+
+## Reading Copilot (Edge Function)
+
+This MVP uses a Supabase Edge Function to call Claude Sonnet and fetch book metadata from Google Books, with Open Library as a fallback.
+
+### Supabase secrets
+
+Set these in Supabase Project Settings > Edge Functions > Secrets:
+
+```sh
+ANTHROPIC_API_KEY=your_anthropic_api_key
+ANTHROPIC_MODEL=claude-sonnet-4-20250514
+GOOGLE_BOOKS_API_KEY=optional_google_books_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+COPILOT_RPS_WINDOW_MS=600000
+COPILOT_USER_LIMIT=20
+COPILOT_IP_LIMIT=8
+```
+
+### Migrations
+
+Run migrations in `supabase/migrations` to create:
+
+- `copilot_preferences`
+- `copilot_feedback`
+- `copilot_recommendations`
+- `copilot_rate_limits`
+
+### Deploy the function
+
+Deploy the function `reading-copilot` and keep `SUPABASE_URL` and `SUPABASE_ANON_KEY` available in the function environment.
+
+If the AI key is missing or rate-limited, the UI will fall back to local recommendations.
+
+### Smoke test (local or remote)
+
+Set the following environment variables and run:
+
+```sh
+SUPABASE_URL=your_project_url
+SUPABASE_ANON_KEY=your_anon_key
+SUPABASE_ACCESS_TOKEN=your_user_access_token
+```
+
+Then:
+
+```sh
+npm run test:copilot
+```
+
+Where to get them:
+
+- `SUPABASE_URL`: Supabase Project Settings -> API -> Project URL.
+- `SUPABASE_ANON_KEY`: Supabase Project Settings -> API -> anon public key.
+- `SUPABASE_ACCESS_TOKEN`: Sign in via the app in your browser, open DevTools -> Application -> Local Storage, and copy the `access_token` from the `sb-<project-ref>-auth-token` entry.

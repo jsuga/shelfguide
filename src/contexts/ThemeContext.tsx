@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-
-export type GenreTheme = "default" | "fantasy" | "scifi" | "history" | "romance" | "thriller";
+import type { GenreTheme } from "@/contexts/theme-types";
 
 interface ThemeContextType {
   theme: GenreTheme;
@@ -18,11 +17,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     localStorage.setItem("reading-copilot-theme", theme);
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
-
-  // Set initial theme on mount
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-  }, []);
 
   return (
     <ThemeContext.Provider value={{ theme, setTheme }}>
