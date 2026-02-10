@@ -152,6 +152,37 @@ Deploy the function `reading-copilot` and keep `SUPABASE_URL` and `SUPABASE_ANON
 
 If the AI key is missing or rate-limited, the UI will fall back to local recommendations.
 
+## Row Level Security (RLS)
+
+This project uses RLS on all app tables in the `public` schema. Policies are least-privilege:
+
+- `books`
+- `copilot_preferences`
+- `copilot_feedback`
+- `copilot_recommendations`
+- `copilot_rate_limits` (user rows only; IP-based rows are inserted via service role)
+
+Each table has explicit `SELECT`, `INSERT`, `UPDATE`, and `DELETE` policies that enforce `auth.uid() = user_id`.
+See `supabase/migrations/20260210142000_rls_policies.sql`.
+
+### Verify RLS in Supabase
+
+1. Run migrations:
+
+```sh
+supabase db push
+```
+
+2. In Supabase Dashboard, open **Security Advisor** and re-run checks. The “Database Has No Security Policies” warning should be cleared.
+
+### Testing policies (anon/authenticated)
+
+Use the anon client (NOT service role) to verify:
+
+- An authenticated user can only see their own rows.
+- An authenticated user cannot read another user’s rows.
+- An unauthenticated client cannot access protected tables.
+
 ### Smoke test (local or remote)
 
 Set the following environment variables and run:
@@ -173,3 +204,22 @@ Where to get them:
 - `SUPABASE_URL`: Supabase Project Settings -> API -> Project URL.
 - `SUPABASE_ANON_KEY`: Supabase Project Settings -> API -> anon public key.
 - `SUPABASE_ACCESS_TOKEN`: Sign in via the app in your browser, open DevTools -> Application -> Local Storage, and copy the `access_token` from the `sb-<project-ref>-auth-token` entry.
+
+## Goodreads Import (CSV)
+
+This integration is import-based (not an API connection). You can re-run it anytime.
+
+### Export from Goodreads
+
+1. Go to Goodreads -> My Books -> Import and Export.
+2. Click “Export Library” to download your CSV.
+
+### Import here
+
+Go to **My Library** and use the **Goodreads Import** card to upload the CSV. The app maps shelves:
+
+- `to-read` -> `tbr`
+- `currently-reading` -> `reading`
+- `read` -> `finished`
+
+Duplicates are merged by ISBN/ISBN13 (preferred) or Title+Author.

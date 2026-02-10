@@ -9,6 +9,7 @@ import Index from "./pages/Index";
 import Library from "./pages/Library";
 import Copilot from "./pages/Copilot";
 import Preferences from "./pages/Preferences";
+import TbrWheel from "./pages/TbrWheel";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -27,6 +28,7 @@ const App = () => (
                 <Route path="/" element={<Index />} />
                 <Route path="/library" element={<Library />} />
                 <Route path="/copilot" element={<Copilot />} />
+                <Route path="/tbr-wheel" element={<TbrWheel />} />
                 <Route path="/preferences" element={<Preferences />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />

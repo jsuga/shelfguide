@@ -18,6 +18,7 @@ import { toast } from "sonner";
 const navLinks = [
   { path: "/", label: "Home" },
   { path: "/library", label: "My Library" },
+  { path: "/tbr-wheel", label: "TBR Wheel" },
   { path: "/copilot", label: "Copilot" },
   { path: "/preferences", label: "Preferences" },
 ];

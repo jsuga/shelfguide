@@ -6,6 +6,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerFooter,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -17,6 +25,15 @@ type LibraryBook = {
   series_name: string | null;
   is_first_in_series: boolean;
   status: string;
+  isbn?: string | null;
+  isbn13?: string | null;
+  rating?: number | null;
+  date_read?: string | null;
+  shelf?: string | null;
+  description?: string | null;
+  page_count?: number | null;
+  thumbnail?: string | null;
+  source?: string | null;
 };
 
 const Library = () => {
@@ -38,6 +55,23 @@ const Library = () => {
   const [userId, setUserId] = useState<string | null>(null);
   const [userLabel, setUserLabel] = useState<string | null>(null);
   const [loadingBooks, setLoadingBooks] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [enrichOnImport, setEnrichOnImport] = useState(true);
+  const [importLogs, setImportLogs] = useState<
+    {
+      id: string;
+      source: string;
+      added_count: number;
+      updated_count: number;
+      failed_count: number;
+      failures: string[] | null;
+      created_at: string;
+    }[]
+  >([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [confirmClearLogs, setConfirmClearLogs] = useState(false);
+  const [selectedFailures, setSelectedFailures] = useState<string[] | null>(null);
 
   const getLocalBooks = () => {
     const stored = localStorage.getItem("reading-copilot-library");
@@ -52,6 +86,49 @@ const Library = () => {
   const setLocalBooks = (nextBooks: LibraryBook[]) => {
     localStorage.setItem("reading-copilot-library", JSON.stringify(nextBooks));
   };
+
+  const loadImportLogs = useCallback(async (userIdValue: string | null) => {
+    if (!userIdValue) {
+      setImportLogs([]);
+      return;
+    }
+    setLoadingLogs(true);
+    const { data, error } = await supabase
+      .from("import_logs")
+      .select("id,source,added_count,updated_count,failed_count,failures,created_at")
+      .eq("user_id", userIdValue)
+      .order("created_at", { ascending: false })
+      .limit(6);
+    setLoadingLogs(false);
+    if (error) {
+      toast.error("Could not load import history.");
+      return;
+    }
+    setImportLogs(data || []);
+  }, []);
+
+  const clearImportLogs = async () => {
+    if (!userId) {
+      setImportLogs([]);
+      return;
+    }
+    const { error } = await supabase
+      .from("import_logs")
+      .delete()
+      .eq("user_id", userId);
+    if (error) {
+      toast.error("Could not clear import history.");
+      return;
+    }
+    setImportLogs([]);
+    toast.success("Import history cleared.");
+  };
+
+  useEffect(() => {
+    if (!confirmClearLogs) return;
+    const timer = setTimeout(() => setConfirmClearLogs(false), 8000);
+    return () => clearTimeout(timer);
+  }, [confirmClearLogs]);
 
   const loadBooks = useCallback(async (userIdValue: string | null) => {
     if (!userIdValue) {
@@ -101,6 +178,7 @@ const Library = () => {
       const username = (user?.user_metadata as { username?: string })?.username;
       setUserLabel(username || user?.email || null);
       await loadBooks(user?.id ?? null);
+      await loadImportLogs(user?.id ?? null);
     };
 
     void init();
@@ -111,12 +189,13 @@ const Library = () => {
       const username = (user?.user_metadata as { username?: string })?.username;
       setUserLabel(username || user?.email || null);
       void loadBooks(user?.id ?? null);
+      void loadImportLogs(user?.id ?? null);
     });
 
     return () => {
       listener.subscription.unsubscribe();
     };
-  }, [loadBooks]);
+  }, [loadBooks, loadImportLogs]);
 
 
   const codeSnippet = useMemo(() => {
@@ -212,6 +291,16 @@ const Library = () => {
 
   const normalizeHeader = (value: string) =>
     value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+
+  const normalizeKey = (value: string) => value.trim().toLowerCase();
+
+  const mapShelfToStatus = (shelf: string) => {
+    const normalized = normalizeKey(shelf);
+    if (normalized === "to-read") return "tbr";
+    if (normalized === "currently-reading") return "reading";
+    if (normalized === "read") return "finished";
+    return "want_to_read";
+  };
 
   const parseCsv = (text: string) => {
     const rows: string[][] = [];
@@ -323,6 +412,220 @@ const Library = () => {
     const nextBooks = [...books, ...booksFromCsv];
     persistBooks(nextBooks);
     toast.success(`Added ${booksFromCsv.length} book${booksFromCsv.length === 1 ? "" : "s"} from CSV.`);
+  };
+
+  const handleGoodreadsImport = async (file: File) => {
+    const text = await file.text();
+    const rows = parseCsv(text).filter((row) => row.some((cell) => cell.trim().length));
+    if (rows.length < 2) {
+      toast.error("CSV is empty or missing rows.");
+      return;
+    }
+
+    const headers = rows[0].map(normalizeHeader);
+    const dataRows = rows.slice(1);
+    const failures: string[] = [];
+
+    const records = dataRows.map((row) => {
+      const record: Record<string, string> = {};
+      headers.forEach((header, index) => {
+        record[header] = (row[index] || "").trim();
+      });
+      return record;
+    });
+
+    const parsed = records
+      .map((record, index) => {
+        const title = record.title?.trim() || "";
+        const author = record.author?.trim() || "";
+        if (!title || !author) {
+          failures.push(`Row ${index + 2}: missing title or author.`);
+          return null;
+        }
+        const shelf = record.exclusive_shelf || record.shelf || "";
+        const status = shelf ? mapShelfToStatus(shelf) : "want_to_read";
+        const isbn = record.isbn?.trim() || "";
+        const isbn13 = record.isbn13?.trim() || "";
+        const rating = record.my_rating ? Number(record.my_rating) : null;
+        const dateRead = record.date_read?.trim() || null;
+        return {
+          title,
+          author,
+          genre: record.genre?.trim() || "",
+          series_name: record.series_name?.trim() || null,
+          is_first_in_series: false,
+          status,
+          isbn: isbn || null,
+          isbn13: isbn13 || null,
+          rating: Number.isFinite(rating) ? rating : null,
+          date_read: dateRead,
+          shelf: shelf || null,
+          source: "goodreads_import",
+        } as LibraryBook;
+      })
+      .filter(Boolean) as LibraryBook[];
+
+    if (!parsed.length) {
+      toast.error("No valid rows found in Goodreads export.");
+      return;
+    }
+
+    setImporting(true);
+
+    let enriched: LibraryBook[] = parsed;
+    if (userId && enrichOnImport) {
+      try {
+        const batches: LibraryBook[][] = [];
+        for (let i = 0; i < parsed.length; i += 8) {
+          batches.push(parsed.slice(i, i + 8));
+        }
+
+        const enrichedResults: LibraryBook[] = [];
+        for (const batch of batches) {
+          const { data } = await supabase.functions.invoke("goodreads-enrich", {
+            body: {
+              items: batch.map((item) => ({
+                isbn: item.isbn,
+                isbn13: item.isbn13,
+                title: item.title,
+                author: item.author,
+              })),
+            },
+          });
+          const results = (data?.results || []) as Array<{
+            description?: string | null;
+            pageCount?: number | null;
+            categories?: string[];
+            thumbnail?: string | null;
+          }>;
+          batch.forEach((item, idx) => {
+            const meta = results[idx];
+            enrichedResults.push({
+              ...item,
+              description: meta?.description || item.description || null,
+              page_count: meta?.pageCount ?? item.page_count ?? null,
+              genre: meta?.categories?.[0] || item.genre || "",
+              thumbnail: meta?.thumbnail || item.thumbnail || null,
+            });
+          });
+        }
+        enriched = enrichedResults;
+      } catch {
+        toast.error("Metadata enrichment failed. Imported without extra details.");
+      }
+    }
+
+    const existing = books;
+    const keyToIndex = new Map<string, number>();
+    existing.forEach((book, index) => {
+      if (book.isbn) keyToIndex.set(`isbn:${normalizeKey(book.isbn)}`, index);
+      if (book.isbn13) keyToIndex.set(`isbn13:${normalizeKey(book.isbn13)}`, index);
+      keyToIndex.set(
+        `title:${normalizeKey(book.title)}|${normalizeKey(book.author)}`,
+        index
+      );
+    });
+
+    let added = 0;
+    let updated = 0;
+    const upserts: LibraryBook[] = [];
+
+    enriched.forEach((book) => {
+      const key =
+        (book.isbn13 && `isbn13:${normalizeKey(book.isbn13)}`) ||
+        (book.isbn && `isbn:${normalizeKey(book.isbn)}`) ||
+        `title:${normalizeKey(book.title)}|${normalizeKey(book.author)}`;
+      const existingIndex = keyToIndex.get(key);
+      if (existingIndex === undefined) {
+        added += 1;
+        upserts.push(book);
+        return;
+      }
+
+      const current = existing[existingIndex];
+      const merged: LibraryBook = {
+        ...current,
+        status: book.status || current.status,
+        shelf: book.shelf || current.shelf,
+        isbn: current.isbn || book.isbn,
+        isbn13: current.isbn13 || book.isbn13,
+        rating: current.rating ?? book.rating ?? null,
+        date_read: current.date_read || book.date_read || null,
+        description: current.description || book.description || null,
+        page_count: current.page_count ?? book.page_count ?? null,
+        thumbnail: current.thumbnail || book.thumbnail || null,
+        genre: current.genre || book.genre,
+      };
+      updated += 1;
+      upserts.push(merged);
+    });
+
+    if (userId) {
+      const inserts = upserts.filter((book) => !book.id);
+      const updates = upserts.filter((book) => book.id);
+      if (inserts.length > 0) {
+        const { error } = await supabase
+          .from("books")
+          .insert(inserts.map((book) => ({ ...book, user_id: userId })));
+        if (error) {
+          failures.push("Insert failed for some rows.");
+        }
+      }
+      for (const book of updates) {
+        if (!book.id) continue;
+        const { error } = await supabase
+          .from("books")
+          .update({
+            title: book.title,
+            author: book.author,
+            genre: book.genre,
+            series_name: book.series_name,
+            is_first_in_series: book.is_first_in_series,
+            status: book.status,
+            isbn: book.isbn,
+            isbn13: book.isbn13,
+            rating: book.rating,
+            date_read: book.date_read,
+            shelf: book.shelf,
+            description: book.description,
+            page_count: book.page_count,
+            thumbnail: book.thumbnail,
+            source: book.source,
+          })
+          .eq("id", book.id);
+        if (error) failures.push(`Update failed for ${book.title}.`);
+      }
+      await loadBooks(userId);
+      await supabase.from("import_logs").insert({
+        user_id: userId,
+        source: "goodreads_csv",
+        added_count: added,
+        updated_count: updated,
+        failed_count: failures.length,
+        failures,
+      });
+      await loadImportLogs(userId);
+    } else {
+      const nextBooks = [...books];
+      upserts.forEach((book) => {
+        const key =
+          (book.isbn13 && `isbn13:${normalizeKey(book.isbn13)}`) ||
+          (book.isbn && `isbn:${normalizeKey(book.isbn)}`) ||
+          `title:${normalizeKey(book.title)}|${normalizeKey(book.author)}`;
+        const existingIndex = keyToIndex.get(key);
+        if (existingIndex === undefined) {
+          nextBooks.push(book);
+        } else {
+          nextBooks[existingIndex] = book;
+        }
+      });
+      persistBooks(nextBooks);
+    }
+
+    setImporting(false);
+    toast.success(
+      `Goodreads import complete. Added ${added}, updated ${updated}, failed ${failures.length}.`
+    );
   };
 
   const handleSignOut = async () => {
@@ -468,6 +771,145 @@ const Library = () => {
           </Button>
         </div>
       </div>
+
+      <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr] mb-10">
+        <Card className="border-border/60 bg-card/70">
+          <CardContent className="p-6">
+            <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">
+              Connect / Import
+            </div>
+            <h2 className="font-display text-2xl font-bold mt-2">Goodreads Import</h2>
+            <p className="text-sm text-muted-foreground font-body mt-2">
+              This is a CSV import (not an API connection yet). You can re-run it anytime.
+            </p>
+            <ol className="list-decimal pl-5 mt-4 space-y-2 text-sm text-muted-foreground">
+              <li>Go to Goodreads &gt; My Books &gt; Import and Export.</li>
+              <li>Export your library to CSV.</li>
+              <li>Upload the CSV here.</li>
+            </ol>
+            <div className="mt-4 flex items-center gap-3">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) {
+                    void handleGoodreadsImport(file);
+                    event.target.value = "";
+                  }
+                }}
+              />
+              <Button onClick={() => importInputRef.current?.click()} disabled={importing}>
+                {importing ? "Importing..." : "Import Goodreads CSV"}
+              </Button>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Checkbox
+                  checked={enrichOnImport}
+                  onCheckedChange={(checked) => setEnrichOnImport(checked === true)}
+                />
+                Enrich metadata (Google Books)
+              </label>
+            </div>
+            {!userId && (
+              <p className="text-xs text-muted-foreground mt-3">
+                Sign in to save import history and enrich metadata securely.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/60 bg-card/70">
+          <CardContent className="p-6">
+            <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">
+              Import history
+            </div>
+            <div className="flex items-center justify-between mt-2">
+              <h3 className="font-display text-xl font-bold">Recent imports</h3>
+              <div className="flex items-center gap-2">
+                {confirmClearLogs ? (
+                  <>
+                    <Button size="sm" variant="destructive" onClick={clearImportLogs}>
+                      Confirm clear
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setConfirmClearLogs(false)}>
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmClearLogs(true)}>
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
+            {loadingLogs ? (
+              <p className="text-sm text-muted-foreground mt-4">Loading history...</p>
+            ) : importLogs.length === 0 ? (
+              <p className="text-sm text-muted-foreground mt-4">
+                No imports yet. Upload a Goodreads CSV to see history.
+              </p>
+            ) : (
+              <div className="mt-4 grid gap-3">
+                {importLogs.map((log) => (
+                  <div key={log.id} className="rounded-lg border border-border/50 bg-background/70 p-3 text-sm">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>{log.source.replace(/_/g, " ")}</span>
+                      <span>{new Date(log.created_at).toLocaleDateString()}</span>
+                    </div>
+                    <div className="mt-1">
+                      Added {log.added_count}, updated {log.updated_count}, failed {log.failed_count}
+                    </div>
+                    {log.failed_count > 0 && (
+                      <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                        {(log.failures || []).slice(0, 3).map((failure) => (
+                          <div key={failure}>- {failure}</div>
+                        ))}
+                        {log.failed_count > 3 && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-1"
+                            onClick={() => setSelectedFailures(log.failures || [])}
+                          >
+                            View all
+                          </Button>
+                        )}
+                        <div className="mt-2 text-[11px] text-muted-foreground/80">
+                          If failures mention enrichment or rate limits, try re-running with
+                          metadata enrichment off.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
+      <Drawer open={!!selectedFailures} onOpenChange={(open) => !open && setSelectedFailures(null)}>
+        <DrawerContent>
+          <DrawerHeader>
+            <DrawerTitle>Import failures</DrawerTitle>
+            <p className="text-sm text-muted-foreground">
+              These rows could not be imported. You can re-run with enrichment off.
+            </p>
+          </DrawerHeader>
+          <div className="px-4 pb-4 max-h-[50vh] overflow-y-auto space-y-2 text-sm text-muted-foreground">
+            {(selectedFailures || []).map((failure, index) => (
+              <div key={`${failure}-${index}`}>- {failure}</div>
+            ))}
+          </div>
+          <DrawerFooter>
+            <Button variant="outline" onClick={() => setSelectedFailures(null)}>
+              Close
+            </Button>
+          </DrawerFooter>
+        </DrawerContent>
+      </Drawer>
 
       {books.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">

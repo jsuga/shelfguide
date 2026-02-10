@@ -25,6 +25,15 @@ export type Database = {
           is_first_in_series: boolean | null
           status: string | null
           created_at: string | null
+          isbn: string | null
+          isbn13: string | null
+          rating: number | null
+          date_read: string | null
+          shelf: string | null
+          description: string | null
+          page_count: number | null
+          thumbnail: string | null
+          source: string | null
         }
         Insert: {
           id?: string
@@ -36,6 +45,15 @@ export type Database = {
           is_first_in_series?: boolean | null
           status?: string | null
           created_at?: string | null
+          isbn?: string | null
+          isbn13?: string | null
+          rating?: number | null
+          date_read?: string | null
+          shelf?: string | null
+          description?: string | null
+          page_count?: number | null
+          thumbnail?: string | null
+          source?: string | null
         }
         Update: {
           id?: string
@@ -47,6 +65,15 @@ export type Database = {
           is_first_in_series?: boolean | null
           status?: string | null
           created_at?: string | null
+          isbn?: string | null
+          isbn13?: string | null
+          rating?: number | null
+          date_read?: string | null
+          shelf?: string | null
+          description?: string | null
+          page_count?: number | null
+          thumbnail?: string | null
+          source?: string | null
         }
       }
       copilot_preferences: {
@@ -187,6 +214,38 @@ export type Database = {
           window_start?: string
           count?: number
           updated_at?: string
+        }
+      }
+      import_logs: {
+        Row: {
+          id: string
+          user_id: string
+          source: string
+          added_count: number
+          updated_count: number
+          failed_count: number
+          failures: Json | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          source: string
+          added_count?: number
+          updated_count?: number
+          failed_count?: number
+          failures?: Json | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          source?: string
+          added_count?: number
+          updated_count?: number
+          failed_count?: number
+          failures?: Json | null
+          created_at?: string
         }
       }
     }
