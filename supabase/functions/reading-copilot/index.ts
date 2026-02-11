@@ -434,7 +434,7 @@ serve(async (req) => {
   const rejected = feedback.filter((entry) => entry.decision === "rejected").slice(0, 4);
 
   const system = [
-    "You are a Reading Copilot that recommends books.",
+    "You are a ShelfGuide copilot that recommends books.",
     "Use the candidates list only; do not invent books.",
     "Return JSON only, matching the schema exactly.",
     "Use the surprise value to balance familiar vs. diverse picks.",

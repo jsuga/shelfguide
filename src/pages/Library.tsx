@@ -72,6 +72,7 @@ const Library = () => {
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [confirmClearLogs, setConfirmClearLogs] = useState(false);
   const [selectedFailures, setSelectedFailures] = useState<string[] | null>(null);
+  const [seedingDemo, setSeedingDemo] = useState(false);
 
   const getLocalBooks = () => {
     const stored = localStorage.getItem("reading-copilot-library");
@@ -293,6 +294,92 @@ const Library = () => {
     value.trim().toLowerCase().replace(/[\s-]+/g, "_");
 
   const normalizeKey = (value: string) => value.trim().toLowerCase();
+
+  const demoBooks: LibraryBook[] = [
+    {
+      title: "The Name of the Wind",
+      author: "Patrick Rothfuss",
+      genre: "Fantasy",
+      series_name: "The Kingkiller Chronicle",
+      is_first_in_series: true,
+      status: "tbr",
+      source: "demo_seed",
+    },
+    {
+      title: "Project Hail Mary",
+      author: "Andy Weir",
+      genre: "Science Fiction",
+      series_name: null,
+      is_first_in_series: false,
+      status: "reading",
+      source: "demo_seed",
+    },
+    {
+      title: "Pachinko",
+      author: "Min Jin Lee",
+      genre: "Historical Fiction",
+      series_name: null,
+      is_first_in_series: false,
+      status: "finished",
+      source: "demo_seed",
+    },
+    {
+      title: "The Night Circus",
+      author: "Erin Morgenstern",
+      genre: "Fantasy",
+      series_name: null,
+      is_first_in_series: false,
+      status: "want_to_read",
+      source: "demo_seed",
+    },
+    {
+      title: "The Seven Husbands of Evelyn Hugo",
+      author: "Taylor Jenkins Reid",
+      genre: "Romance",
+      series_name: null,
+      is_first_in_series: false,
+      status: "want_to_read",
+      source: "demo_seed",
+    },
+    {
+      title: "Gone Girl",
+      author: "Gillian Flynn",
+      genre: "Thriller",
+      series_name: null,
+      is_first_in_series: false,
+      status: "want_to_read",
+      source: "demo_seed",
+    },
+  ];
+
+  const handleSeedDemo = async () => {
+    if (!userId) {
+      toast.error("Sign in to seed the demo library.");
+      return;
+    }
+    setSeedingDemo(true);
+    const existingKeys = new Set(
+      books.map((book) => `${normalizeKey(book.title)}|${normalizeKey(book.author)}`)
+    );
+    const toInsert = demoBooks.filter(
+      (book) => !existingKeys.has(`${normalizeKey(book.title)}|${normalizeKey(book.author)}`)
+    );
+    if (toInsert.length === 0) {
+      toast.success("Demo library already added.");
+      setSeedingDemo(false);
+      return;
+    }
+    const { error } = await supabase
+      .from("books")
+      .insert(toInsert.map((book) => ({ ...book, user_id: userId })));
+    setSeedingDemo(false);
+    if (error) {
+      toast.error("Could not seed demo library.");
+      return;
+    }
+    await loadBooks(userId);
+    toast.success(`Added ${toInsert.length} demo book${toInsert.length === 1 ? "" : "s"}.`);
+  };
 
   const mapShelfToStatus = (shelf: string) => {
     const normalized = normalizeKey(shelf);
@@ -817,6 +904,29 @@ const Library = () => {
                 Sign in to save import history and enrich metadata securely.
               </p>
             )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/60 bg-card/70">
+          <CardContent className="p-6">
+            <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">
+              Demo Mode
+            </div>
+            <h2 className="font-display text-2xl font-bold mt-2">Sample Library</h2>
+            <p className="text-sm text-muted-foreground font-body mt-2">
+              Need a quick sample set for fair day? Seed a curated starter library to
+              show ShelfGuide in action.
+            </p>
+            <div className="mt-4">
+              <Button onClick={handleSeedDemo} disabled={!userId || seedingDemo}>
+                {seedingDemo ? "Seeding..." : "Seed demo library"}
+              </Button>
+              {!userId && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  Sign in to add demo books to your account.
+                </p>
+              )}
+            </div>
           </CardContent>
         </Card>
 

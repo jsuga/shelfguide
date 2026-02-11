@@ -1,4 +1,6 @@
-# Welcome to your Lovable project
+# ShelfGuide — Because choosing is the hardest part.
+
+ShelfGuide is an AI-powered reading companion that helps you decide what to read next with transparent, genre-aware recommendations.
 
 ## Project info
 
@@ -119,7 +121,7 @@ create policy "Users can delete their own books"
 
 Local storage is still used as a fallback when the user is not signed in.
 
-## Reading Copilot (Edge Function)
+## ShelfGuide Copilot (Edge Function)
 
 This MVP uses a Supabase Edge Function to call Claude Sonnet and fetch book metadata from Google Books, with Open Library as a fallback.
 

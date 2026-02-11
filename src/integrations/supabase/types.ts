@@ -84,6 +84,7 @@ export type Database = {
           preferred_pace: string | null
           preferred_formats: string[]
           notes: string | null
+          ui_theme: string | null
           updated_at: string
         }
         Insert: {
@@ -93,6 +94,7 @@ export type Database = {
           preferred_pace?: string | null
           preferred_formats?: string[]
           notes?: string | null
+          ui_theme?: string | null
           updated_at?: string
         }
         Update: {
@@ -102,6 +104,7 @@ export type Database = {
           preferred_pace?: string | null
           preferred_formats?: string[]
           notes?: string | null
+          ui_theme?: string | null
           updated_at?: string
         }
       }

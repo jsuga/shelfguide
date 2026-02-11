@@ -37,8 +37,8 @@ const App = () => (
             <footer className="py-8 border-t border-border/50">
               <div className="container mx-auto px-4 text-center text-sm text-muted-foreground font-body">
                 <p>
-                  Your Next Chapter - AI-powered book recommendations. Built with love
-                  for readers.
+                  ShelfGuide - AI-powered book recommendations. Built with love for
+                  readers.
                 </p>
               </div>
             </footer>

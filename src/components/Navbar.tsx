@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { BookOpen, Menu } from "lucide-react";
+import { BookOpen, Menu, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -12,6 +12,10 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useTheme } from "@/contexts/ThemeContext";
+import type { GenreTheme } from "@/contexts/theme-types";
+import { themeOptions } from "@/contexts/theme-types";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -31,6 +35,7 @@ const Navbar = () => {
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authUsername, setAuthUsername] = useState("");
+  const { theme, setTheme } = useTheme();
 
   const handleAuth = async () => {
     if (!authEmail || !authPassword) {
@@ -90,7 +95,7 @@ const Navbar = () => {
           className="flex items-center gap-2 font-display text-xl font-bold tracking-tight"
         >
           <BookOpen className="w-6 h-6 text-primary" />
-          <span>Your Next Chapter</span>
+          <span>ShelfGuide</span>
         </Link>
 
         {/* Desktop links */}
@@ -105,6 +110,23 @@ const Navbar = () => {
               <Link to={link.path}>{link.label}</Link>
             </Button>
           ))}
+          <div className="ml-2 w-44">
+            <Select value={theme} onValueChange={(value) => setTheme(value as GenreTheme)}>
+              <SelectTrigger className="h-9">
+                <div className="flex items-center gap-2">
+                  <Palette className="h-4 w-4 text-muted-foreground" />
+                  <SelectValue placeholder="Theme" />
+                </div>
+              </SelectTrigger>
+              <SelectContent>
+                {themeOptions.map((option) => (
+                  <SelectItem key={option.id} value={option.id}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <Button
             variant="outline"
             size="sm"

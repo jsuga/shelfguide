@@ -192,6 +192,10 @@ const Index = () => {
               AI-Powered Book Discovery
             </div>
 
+            <p className="text-sm md:text-base font-body uppercase tracking-[0.25em] text-primary/70 mb-4">
+              ShelfGuide — Because choosing is the hardest part.
+            </p>
+
             <h1 className="font-display text-5xl md:text-7xl lg:text-8xl font-bold tracking-tight mb-6">
               Your AI Reading
               <br />
@@ -269,7 +273,7 @@ const Index = () => {
         <div className="container mx-auto px-4">
           <motion.div {...fadeInUp} className="text-center mb-16">
             <h2 className="font-display text-3xl md:text-5xl font-bold mb-4">
-              Why Reading Copilot?
+              Why ShelfGuide?
             </h2>
             <p className="text-muted-foreground text-lg max-w-xl mx-auto font-body">
               Powered by AI that explains itself

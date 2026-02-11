@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Palette } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import type { GenreTheme } from "@/contexts/theme-types";
+import { themeOptions } from "@/contexts/theme-types";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -108,6 +109,15 @@ const fadeInUp = {
   transition: { duration: 0.6 },
 };
 
+const parseList = (value: string) =>
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const listToString = (value: string[] | null | undefined) =>
+  Array.isArray(value) ? value.join(", ") : "";
+
 const Preferences = () => {
   const { theme, setTheme } = useTheme();
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -119,15 +129,6 @@ const Preferences = () => {
   const [preferredPace, setPreferredPace] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [savingPrefs, setSavingPrefs] = useState(false);
-
-  const parseList = (value: string) =>
-    value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-  const listToString = (value: string[] | null | undefined) =>
-    Array.isArray(value) ? value.join(", ") : "";
 
   useEffect(() => {
     const init = async () => {
@@ -148,6 +149,9 @@ const Preferences = () => {
           setPreferredFormats(listToString(prefs.preferred_formats));
           setPreferredPace(prefs.preferred_pace ?? null);
           setNotes(prefs.notes ?? "");
+          if (prefs.ui_theme) {
+            setTheme(prefs.ui_theme as GenreTheme);
+          }
         }
       }
     };
@@ -171,6 +175,9 @@ const Preferences = () => {
             setPreferredFormats(listToString(prefs.preferred_formats));
             setPreferredPace(prefs.preferred_pace ?? null);
             setNotes(prefs.notes ?? "");
+            if (prefs.ui_theme) {
+              setTheme(prefs.ui_theme as GenreTheme);
+            }
           }
         })();
       }
@@ -179,7 +186,7 @@ const Preferences = () => {
     return () => {
       listener.subscription.unsubscribe();
     };
-  }, []);
+  }, [setTheme]);
 
   const handleSave = async () => {
     if (!username.trim()) {
@@ -220,6 +227,7 @@ const Preferences = () => {
         preferred_formats: parseList(preferredFormats),
         preferred_pace: preferredPace,
         notes: notes.trim() || null,
+        ui_theme: theme,
         updated_at: new Date().toISOString(),
       });
     setSavingPrefs(false);
@@ -358,6 +366,29 @@ const Preferences = () => {
               Each genre transforms the entire reading experience
             </p>
           </motion.div>
+
+          <div className="mb-8 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 max-w-3xl mx-auto">
+            <div>
+              <Label className="text-sm text-muted-foreground">Theme</Label>
+              <p className="font-body text-sm text-muted-foreground">
+                {userEmail
+                  ? "Saved to your account and synced across devices."
+                  : "Sign in to sync your theme across devices."}
+              </p>
+            </div>
+            <Select value={theme} onValueChange={(value) => setTheme(value as GenreTheme)}>
+              <SelectTrigger className="w-full sm:w-64">
+                <SelectValue placeholder="Select theme" />
+              </SelectTrigger>
+              <SelectContent>
+                {themeOptions.map((option) => (
+                  <SelectItem key={option.id} value={option.id}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
           <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4 max-w-6xl mx-auto">
             {themeCards.map((t, i) => (
