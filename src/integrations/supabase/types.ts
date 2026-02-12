@@ -22,7 +22,7 @@ export type Database = {
           author: string
           genre: string | null
           series_name: string | null
-          is_first_in_series: boolean | null
+          is_first_in_series: boolean
           status: string | null
           created_at: string | null
           isbn: string | null
@@ -42,7 +42,7 @@ export type Database = {
           author: string
           genre?: string | null
           series_name?: string | null
-          is_first_in_series?: boolean | null
+          is_first_in_series?: boolean
           status?: string | null
           created_at?: string | null
           isbn?: string | null
@@ -62,7 +62,7 @@ export type Database = {
           author?: string
           genre?: string | null
           series_name?: string | null
-          is_first_in_series?: boolean | null
+          is_first_in_series?: boolean
           status?: string | null
           created_at?: string | null
           isbn?: string | null

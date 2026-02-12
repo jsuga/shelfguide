@@ -52,39 +52,40 @@
 
   /* ─── Fantasy: Enchanted Forest ─── */
   [data-theme="fantasy"] {
-    --font-display: 'Cinzel', serif;
-    --font-body: 'Lora', serif;
-    --theme-hero-image: url("/images/themes/fantasy1.jpg");
-    --theme-backdrop-image: url("/images/themes/fantasy2.jpg");
+    --font-display: 'Playfair Display', serif;
+    --font-body: 'Source Serif 4', serif;
+    --theme-hero-image: none;
+    --theme-backdrop-image: none;
 
-    --background: 140 25% 8%;
-    --foreground: 45 35% 88%;
-    --card: 140 20% 12%;
-    --card-foreground: 45 35% 88%;
-    --popover: 140 20% 12%;
-    --popover-foreground: 45 35% 88%;
-    --primary: 42 80% 52%;
-    --primary-foreground: 140 25% 8%;
-    --secondary: 150 30% 16%;
-    --secondary-foreground: 45 35% 85%;
-    --muted: 140 18% 15%;
-    --muted-foreground: 45 15% 55%;
-    --accent: 42 70% 45%;
-    --accent-foreground: 140 25% 8%;
+    --background: 48 44% 95%;
+    --foreground: 148 24% 18%;
+    --card: 44 38% 97%;
+    --card-foreground: 148 24% 18%;
+    --popover: 44 38% 97%;
+    --popover-foreground: 148 24% 18%;
+    --primary: 132 24% 42%;
+    --primary-foreground: 44 38% 98%;
+    --secondary: 334 28% 89%;
+    --secondary-foreground: 334 20% 28%;
+    --muted: 270 28% 92%;
+    --muted-foreground: 148 15% 38%;
+    --accent: 266 30% 76%;
+    --accent-foreground: 266 28% 24%;
     --destructive: 0 70% 45%;
-    --destructive-foreground: 45 35% 88%;
-    --border: 140 15% 18%;
-    --input: 140 15% 18%;
-    --ring: 42 80% 52%;
+    --destructive-foreground: 44 38% 98%;
+    --border: 132 18% 80%;
+    --input: 132 18% 80%;
+    --ring: 132 30% 45%;
+    --radius: 0.8rem;
 
-    --sidebar-background: 140 20% 10%;
-    --sidebar-foreground: 45 35% 85%;
-    --sidebar-primary: 42 80% 52%;
-    --sidebar-primary-foreground: 140 25% 8%;
-    --sidebar-accent: 150 30% 16%;
-    --sidebar-accent-foreground: 45 35% 85%;
-    --sidebar-border: 140 15% 18%;
-    --sidebar-ring: 42 80% 52%;
+    --sidebar-background: 44 36% 96%;
+    --sidebar-foreground: 148 24% 20%;
+    --sidebar-primary: 132 24% 42%;
+    --sidebar-primary-foreground: 44 38% 98%;
+    --sidebar-accent: 334 28% 90%;
+    --sidebar-accent-foreground: 334 20% 28%;
+    --sidebar-border: 132 18% 80%;
+    --sidebar-ring: 132 30% 45%;
   }
 
   /* ─── Sci-Fi: Space Station ─── */
@@ -288,6 +289,34 @@
     filter: saturate(1.25) contrast(1.1);
     mix-blend-mode: multiply;
     pointer-events: none;
+  }
+
+  [data-theme="fantasy"] .theme-hero-vignette {
+    background:
+      radial-gradient(circle at 15% 20%, hsl(var(--primary) / 0.13), transparent 42%),
+      radial-gradient(circle at 82% 10%, hsl(var(--accent) / 0.18), transparent 40%),
+      linear-gradient(180deg, hsl(var(--background) / 0.96), hsl(var(--background) / 0.86) 52%, hsl(var(--background) / 0.95));
+  }
+
+  [data-theme="fantasy"] .theme-page::before {
+    background-image:
+      radial-gradient(circle at 12% 15%, hsl(var(--primary) / 0.13), transparent 38%),
+      radial-gradient(circle at 88% 16%, hsl(var(--secondary) / 0.2), transparent 35%),
+      radial-gradient(circle at 22% 75%, hsl(var(--accent) / 0.14), transparent 26%),
+      radial-gradient(circle at 80% 78%, hsl(var(--primary) / 0.1), transparent 30%),
+      linear-gradient(180deg, hsl(var(--background)), hsl(var(--background) / 0.95));
+  }
+
+  [data-theme="fantasy"] .theme-page::after {
+    background-image:
+      radial-gradient(circle at 14% 28%, hsl(var(--secondary) / 0.22) 1px, transparent 1.5px),
+      radial-gradient(circle at 84% 22%, hsl(var(--accent) / 0.25) 1px, transparent 1.6px),
+      radial-gradient(circle at 24% 78%, hsl(var(--primary) / 0.16) 1px, transparent 1.6px),
+      radial-gradient(circle at 76% 74%, hsl(var(--secondary) / 0.2) 1px, transparent 1.4px);
+    background-size: 260px 260px, 240px 240px, 300px 300px, 280px 280px;
+    opacity: 0.22;
+    filter: none;
+    mix-blend-mode: normal;
   }
 
   h1, h2, h3, h4, h5, h6 {

@@ -3,23 +3,36 @@ import { Sparkles, RotateCw, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
   applyTbrFilters,
+  dedupeCandidatesAgainstOwned,
   pickWinnerIndex,
   sampleForWheel,
   type TbrBook,
   type TbrFilters,
+  type TbrWheelGenre,
+  TBR_WHEEL_GENRES,
+  type TbrFirstInSeriesFilter,
+  type TbrOwnershipMode,
+  type TbrStatusFilter,
 } from "@/lib/tbrWheel";
 
 type LibraryBook = TbrBook & {
   thumbnail?: string | null;
   status?: string | null;
   user_id?: string;
+  series_name?: string | null;
+  is_first_in_series?: boolean | null;
+  isbn?: string | null;
+  isbn13?: string | null;
+  source?: string | null;
 };
 
 const LIBRARY_KEY = "reading-copilot-library";
+const WHEEL_MAX = 30;
 
 const getLocalBooks = (): LibraryBook[] => {
   const stored = localStorage.getItem(LIBRARY_KEY);
@@ -36,9 +49,91 @@ const setLocalBooks = (books: LibraryBook[]) => {
 };
 
 const defaultFilters: TbrFilters = {
-  genre: "Any",
+  genres: ["Any"],
+  firstInSeries: "any",
+  status: "tbr",
+  ownership: "library",
   length: "Any",
   rating: "Any",
+};
+
+type CopilotRecommendation = {
+  id: string;
+  title: string;
+  author: string;
+  genre: string;
+};
+
+const normalize = (value: string) => value.trim().toLowerCase();
+
+const getSelectedGenres = (filters: TbrFilters) =>
+  filters.genres.filter((genre) => genre !== "Any") as TbrWheelGenre[];
+
+const buildCopilotPrompts = (filters: TbrFilters) => {
+  const selectedGenres = getSelectedGenres(filters);
+  const genrePrompt =
+    selectedGenres.length > 0
+      ? `genres: ${selectedGenres.join(", ")}`
+      : "genres: broad mix";
+
+  const firstPrompt =
+    filters.firstInSeries === "first_only"
+      ? "prefer first books in series"
+      : filters.firstInSeries === "not_first"
+      ? "prefer standalones or not-first-in-series books"
+      : "series position: any";
+
+  return [
+    `tbr recommendations, ${genrePrompt}, ${firstPrompt}`,
+    `reader wants new picks, ${genrePrompt}, ${firstPrompt}`,
+    `recommend outside owned library, ${genrePrompt}, ${firstPrompt}`,
+    `discoverable books for reading next, ${genrePrompt}, ${firstPrompt}`,
+  ];
+};
+
+const parseGoogleBook = (payload: unknown) => {
+  const data = payload as {
+    items?: Array<{
+      volumeInfo?: {
+        categories?: string[];
+        pageCount?: number;
+        imageLinks?: { thumbnail?: string };
+        industryIdentifiers?: Array<{ type?: string; identifier?: string }>;
+      };
+    }>;
+  };
+  const first = data?.items?.[0]?.volumeInfo;
+  if (!first) return null;
+  const identifiers = first.industryIdentifiers || [];
+  const isbn13 =
+    identifiers.find((entry) => normalize(entry.type || "") === "isbn_13")?.identifier || null;
+  const isbn =
+    identifiers.find((entry) => normalize(entry.type || "") === "isbn_10")?.identifier || null;
+  return {
+    categories: first.categories || [],
+    page_count: first.pageCount ?? null,
+    thumbnail: first.imageLinks?.thumbnail || null,
+    isbn,
+    isbn13,
+  };
+};
+
+const enrichFromGoogleBooks = async (book: CopilotRecommendation) => {
+  const query = `intitle:${book.title} inauthor:${book.author}`;
+  const url = new URL("https://www.googleapis.com/books/v1/volumes");
+  url.searchParams.set("q", query);
+  url.searchParams.set("maxResults", "1");
+  url.searchParams.set("printType", "books");
+  url.searchParams.set("langRestrict", "en");
+
+  try {
+    const response = await fetch(url.toString());
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return parseGoogleBook(payload);
+  } catch {
+    return null;
+  }
 };
 
 const TbrWheel = () => {
@@ -46,6 +141,9 @@ const TbrWheel = () => {
   const [userId, setUserId] = useState<string | null>(null);
   const [filters, setFilters] = useState<TbrFilters>(defaultFilters);
   const [appliedFilters, setAppliedFilters] = useState<TbrFilters>(defaultFilters);
+  const [externalCandidates, setExternalCandidates] = useState<LibraryBook[]>([]);
+  const [loadingExternal, setLoadingExternal] = useState(false);
+  const [sampleNonce, setSampleNonce] = useState(0);
   const [wheelBooks, setWheelBooks] = useState<LibraryBook[]>([]);
   const [rotation, setRotation] = useState(0);
   const [spinning, setSpinning] = useState(false);
@@ -89,30 +187,112 @@ const TbrWheel = () => {
     };
   }, []);
 
-  const tbrBooks = useMemo(
-    () => books.filter((book) => (book.status || "").toLowerCase() === "tbr"),
-    [books]
+  const sourceBooks = useMemo(
+    () => (appliedFilters.ownership === "library" ? books : externalCandidates),
+    [appliedFilters.ownership, books, externalCandidates]
   );
+
+  const effectiveFilters = useMemo(() => {
+    if (appliedFilters.ownership === "not_owned") {
+      return { ...appliedFilters, status: "tbr" as TbrStatusFilter };
+    }
+    return appliedFilters;
+  }, [appliedFilters]);
 
   const filtered = useMemo(
-    () => applyTbrFilters(tbrBooks, appliedFilters),
-    [tbrBooks, appliedFilters]
+    () => applyTbrFilters(sourceBooks, effectiveFilters),
+    [sourceBooks, effectiveFilters]
   );
 
-  const displayed = useMemo(() => sampleForWheel(filtered, 30), [filtered]);
+  const displayed = useMemo(() => {
+    void sampleNonce;
+    return sampleForWheel(filtered, WHEEL_MAX);
+  }, [filtered, sampleNonce]);
 
   useEffect(() => {
     setWheelBooks(displayed);
   }, [displayed]);
 
-  const applyFilters = () => {
+  const refreshSample = () => {
+    setSampleNonce((value) => value + 1);
+    setWinner(null);
+    setRotation(0);
+  };
+
+  const loadExternalCandidates = async (nextFilters: TbrFilters) => {
+    if (!userId) {
+      setExternalCandidates([]);
+      toast.error("Sign in to get recommendations outside your library.");
+      return;
+    }
+
+    setLoadingExternal(true);
+    const prompts = buildCopilotPrompts(nextFilters);
+
+    const results = await Promise.all(
+      prompts.map(async (prompt) => {
+        const { data, error } = await supabase.functions.invoke("reading-copilot", {
+          body: {
+            prompt,
+            tags: getSelectedGenres(nextFilters).map((genre) => normalize(genre)),
+            surprise: 55,
+            limit: 6,
+          },
+        });
+        if (error) return [] as CopilotRecommendation[];
+        const recs = (data?.recommendations || []) as CopilotRecommendation[];
+        return recs;
+      })
+    );
+
+    const flat = results.flat();
+    if (flat.length === 0) {
+      setExternalCandidates([]);
+      setLoadingExternal(false);
+      toast.error("Could not load recommendation candidates from Copilot.");
+      return;
+    }
+
+    const enriched = await Promise.all(
+      flat.map(async (candidate) => {
+        const meta = await enrichFromGoogleBooks(candidate);
+        return {
+          id: candidate.id,
+          title: candidate.title,
+          author: candidate.author,
+          genre: meta?.categories?.[0] || candidate.genre || null,
+          status: "tbr",
+          is_first_in_series: false,
+          series_name: null,
+          page_count: meta?.page_count ?? null,
+          thumbnail: meta?.thumbnail || null,
+          isbn: meta?.isbn || null,
+          isbn13: meta?.isbn13 || null,
+          source: "copilot_recommendation",
+        } as LibraryBook;
+      })
+    );
+
+    const deduped = dedupeCandidatesAgainstOwned(enriched, books);
+    setExternalCandidates(deduped);
+    setLoadingExternal(false);
+    if (deduped.length === 0) {
+      toast.error("No non-owned recommendations matched your filters.");
+    }
+  };
+
+  const applyFilters = async () => {
     const next = {
       ...filters,
       rating: filters.rating === ">=4" ? ">=4" : "Any",
     };
     setAppliedFilters(next);
+    if (next.ownership === "not_owned") {
+      await loadExternalCandidates(next);
+    }
     setWinner(null);
     setRotation(0);
+    setSampleNonce((value) => value + 1);
   };
 
   const spin = () => {
@@ -129,6 +309,53 @@ const TbrWheel = () => {
       setWinner(wheelBooks[winnerIndex] ?? null);
       setSpinning(false);
     }, 2800);
+  };
+
+  const addWinnerToLibrary = async () => {
+    if (!winner) return;
+    const payload = {
+      title: winner.title,
+      author: winner.author,
+      genre: winner.genre || "",
+      series_name: winner.series_name || null,
+      is_first_in_series: winner.is_first_in_series === true,
+      status: "tbr",
+      page_count: winner.page_count ?? null,
+      thumbnail: winner.thumbnail || null,
+      isbn: winner.isbn || null,
+      isbn13: winner.isbn13 || null,
+      source: winner.source || "tbr_wheel",
+    };
+
+    if (userId) {
+      const { data, error } = await supabase
+        .from("books")
+        .insert([{ ...payload, user_id: userId }])
+        .select("*")
+        .single();
+      if (error) {
+        toast.error("Could not add this book to your library.");
+        return;
+      }
+      const nextBooks = [data as LibraryBook, ...books];
+      setBooks(nextBooks);
+      setExternalCandidates((current) =>
+        current.filter(
+          (entry) =>
+            !(
+              normalize(entry.title) === normalize(winner.title) &&
+              normalize(entry.author) === normalize(winner.author)
+            )
+        )
+      );
+      toast.success("Added to your library as TBR.");
+      return;
+    }
+
+    const nextBooks = [{ ...payload }, ...books];
+    setBooks(nextBooks);
+    setLocalBooks(nextBooks);
+    toast.success("Added to your local library as TBR.");
   };
 
   const startReading = async () => {
@@ -195,19 +422,111 @@ const TbrWheel = () => {
           <div className="mt-4 grid gap-4">
             <div className="grid gap-2">
               <label className="text-sm font-medium">Genre</label>
-              <Select value={filters.genre} onValueChange={(value) => setFilters((prev) => ({ ...prev, genre: value as TbrFilters["genre"] }))}>
+              <div className="rounded-lg border border-border/60 bg-background/60 p-3 grid gap-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={filters.genres.includes("Any")}
+                    onCheckedChange={(checked) =>
+                      setFilters((prev) => ({
+                        ...prev,
+                        genres: checked ? ["Any"] : [],
+                      }))
+                    }
+                  />
+                  Any
+                </label>
+                {TBR_WHEEL_GENRES.map((genre) => (
+                  <label key={genre} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={filters.genres.includes(genre)}
+                      onCheckedChange={(checked) =>
+                        setFilters((prev) => {
+                          const withoutAny = prev.genres.filter((value) => value !== "Any");
+                          if (checked) {
+                            return { ...prev, genres: [...withoutAny, genre] };
+                          }
+                          const nextGenres = withoutAny.filter((value) => value !== genre);
+                          return { ...prev, genres: nextGenres.length ? nextGenres : ["Any"] };
+                        })
+                      }
+                    />
+                    {genre}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">First in series</label>
+              <Select
+                value={filters.firstInSeries}
+                onValueChange={(value) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    firstInSeries: value as TbrFirstInSeriesFilter,
+                  }))
+                }
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select genre" />
+                  <SelectValue placeholder="Series filter" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Any">Any</SelectItem>
-                  <SelectItem value="Fantasy">Fantasy</SelectItem>
-                  <SelectItem value="Science Fiction">Science Fiction</SelectItem>
-                  <SelectItem value="History">History</SelectItem>
-                  <SelectItem value="Romance">Romance</SelectItem>
-                  <SelectItem value="Thriller">Thriller</SelectItem>
+                  <SelectItem value="any">Any</SelectItem>
+                  <SelectItem value="first_only">First in series only</SelectItem>
+                  <SelectItem value="not_first">Not first in series</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">Status</label>
+              <Select
+                value={filters.status}
+                onValueChange={(value) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    status: value as TbrStatusFilter,
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="tbr">TBR</SelectItem>
+                  <SelectItem value="reading">Reading</SelectItem>
+                  <SelectItem value="finished">Finished</SelectItem>
+                  <SelectItem value="want_to_read">Want to read</SelectItem>
+                  <SelectItem value="paused">Paused</SelectItem>
+                  <SelectItem value="any">Any</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">Ownership</label>
+              <Select
+                value={filters.ownership}
+                onValueChange={(value) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    ownership: value as TbrOwnershipMode,
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select ownership mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="library">In my library</SelectItem>
+                  <SelectItem value="not_owned">Not owned / recommend outside my library</SelectItem>
+                </SelectContent>
+              </Select>
+              {filters.ownership === "not_owned" && (
+                <div className="text-xs text-muted-foreground">
+                  Status is treated as TBR intent in this mode.
+                </div>
+              )}
             </div>
 
             <div className="grid gap-2">
@@ -246,8 +565,8 @@ const TbrWheel = () => {
               )}
             </div>
 
-            <Button onClick={applyFilters}>
-              Apply filters
+            <Button onClick={() => void applyFilters()} disabled={loadingExternal}>
+              {loadingExternal ? "Loading candidates..." : "Apply filters"}
             </Button>
 
             <div className="text-sm text-muted-foreground">
@@ -257,7 +576,14 @@ const TbrWheel = () => {
         </section>
 
         <section className="grid gap-4">
-          {filtered.length === 0 ? (
+          {loadingExternal ? (
+            <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-8 text-center">
+              <h3 className="font-display text-xl font-bold mb-2">Building your candidate wheel</h3>
+              <p className="text-sm text-muted-foreground font-body mb-4">
+                Generating non-owned recommendations and enriching metadata.
+              </p>
+            </div>
+          ) : filtered.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-8 text-center">
               <h3 className="font-display text-xl font-bold mb-2">No matches yet</h3>
               <p className="text-sm text-muted-foreground font-body mb-4">
@@ -302,10 +628,15 @@ const TbrWheel = () => {
                     </div>
                     <div className="absolute top-1/2 left-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary" />
                   </div>
-                  {filtered.length > 30 && (
-                    <p className="text-xs text-muted-foreground mt-3">
-                      Showing a randomized subset of 30 books for the wheel.
-                    </p>
+                  {filtered.length > WHEEL_MAX && (
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <p className="text-xs text-muted-foreground">
+                        Spinning among a random sample of {WHEEL_MAX} of {filtered.length} matches.
+                      </p>
+                      <Button size="sm" variant="outline" onClick={refreshSample}>
+                        Refresh sample
+                      </Button>
+                    </div>
                   )}
                 </CardContent>
               </Card>
@@ -332,9 +663,15 @@ const TbrWheel = () => {
                         <h3 className="font-display text-xl font-bold">{winner.title}</h3>
                         <p className="text-sm text-muted-foreground">{winner.author}</p>
                         <div className="mt-3 flex flex-wrap gap-2">
-                          <Button size="sm" onClick={startReading}>
-                            Start Reading
-                          </Button>
+                          {appliedFilters.ownership === "library" ? (
+                            <Button size="sm" onClick={startReading}>
+                              Start Reading
+                            </Button>
+                          ) : (
+                            <Button size="sm" onClick={addWinnerToLibrary}>
+                              Add to Library (TBR)
+                            </Button>
+                          )}
                           <Button size="sm" variant="outline" onClick={spin}>
                             Spin again
                           </Button>
