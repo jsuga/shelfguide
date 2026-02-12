@@ -263,3 +263,30 @@ Duplicates are merged by ISBN/ISBN13 (preferred) or Title+Author.
 
 - `npm test` passed.
 - `npm run lint` passed.
+
+## Session 5.1 Updates
+
+### TBR Wheel UX adjustment
+
+- Updated TBR Wheel filter behavior so **Length** is hidden when ownership mode is **In my library**.
+- In library mode, length is forced to `Any` to prevent accidental filtering against missing `page_count` values from default CSV imports.
+- Length filtering remains available in **Not owned / recommend outside my library** mode.
+
+### Fantasy theme redesign (balanced pass)
+
+- Reworked Fantasy again to sit between the original dark style and the lighter cottagecore pass:
+  - Soft moss/forest-leaning light background (not cream, not dark mode)
+  - Deep sage/muted emerald primary
+  - Dusty lavender/plum secondary
+  - Soft amber highlight accent used sparingly
+  - Deep charcoal text for readable but non-harsh contrast
+- Added more visual richness without heavy contrast:
+  - Layered, subtle gradients for depth
+  - Low-opacity botanical/storybook texture treatment in page background
+  - Gentle card elevation and rounded cozy surfaces
+  - Soft glow/highlight treatment for primary buttons
+- Kept all non-Fantasy themes unchanged.
+
+### Validation
+
+- `npm run lint` passed.
