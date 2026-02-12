@@ -225,3 +225,41 @@ Go to **My Library** and use the **Goodreads Import** card to upload the CSV. Th
 - `read` -> `finished`
 
 Duplicates are merged by ISBN/ISBN13 (preferred) or Title+Author.
+
+## Session 5 Updates
+
+### TBR Wheel
+
+- Added filters for:
+  - Genre multi-select (`Fantasy`, `Science Fiction`, `History`, `Romance`, `Thriller`, `Any`)
+  - `is_first_in_series` (`Any`, `First in series only`, `Not first in series`)
+  - Status (`TBR`, `Reading`, `Finished`, plus existing statuses)
+  - Ownership mode (`In my library` vs `Not owned / recommend outside my library`)
+- Default wheel status filter is now `TBR`.
+- Added ownership behavior:
+  - `In my library`: wheel uses matching rows from `books`.
+  - `Not owned`: invokes `reading-copilot`, enriches with Google Books metadata, de-dupes against owned books (ISBN/ISBN13 first, else Title+Author), then spins on final candidates.
+- Added winner CTA in `Not owned` mode: **Add to Library (TBR)**.
+- Added wheel cap behavior and messaging:
+  - Max 30 slices.
+  - If more matches exist, wheel spins on a random sample with refreshable sampling.
+
+### Data model / migrations
+
+- Added migration `supabase/migrations/20260212103000_enforce_books_first_in_series.sql` to ensure `books.is_first_in_series` exists, defaults to `false`, and is non-null.
+- Updated Supabase TypeScript types so `books.is_first_in_series` is non-nullable in generated table row types.
+
+### Theme redesign (Fantasy only)
+
+- Redesigned Fantasy theme to a soft whimsical cottagecore style:
+  - Light parchment background
+  - Sage primary with dusty rose/lavender accents
+  - Softer card surfaces, rounded corners, gentle decorative background motifs
+  - Readable contrast and preserved focus/ring tokens
+- Other themes remain unchanged.
+- Theme persistence remains tied to `copilot_preferences.ui_theme`.
+
+### Validation
+
+- `npm test` passed.
+- `npm run lint` passed.
