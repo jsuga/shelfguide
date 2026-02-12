@@ -135,7 +135,7 @@ const Preferences = () => {
   const [notes, setNotes] = useState("");
   const [savingPrefs, setSavingPrefs] = useState(false);
 
-  const getThemeFallback = (themeId: GenreTheme) => `/images/themes/${themeId}1.jpg`;
+  const getThemeFallback = (_themeId: GenreTheme) => "/images/themes/shelf1.jpg";
   const getImageSrc = (themeId: GenreTheme, src: string) =>
     failedImages[src] ? getThemeFallback(themeId) : src;
 

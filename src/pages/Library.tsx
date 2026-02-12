@@ -724,7 +724,14 @@ const Library = () => {
     <main className="container mx-auto px-4 pt-24 pb-16">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="font-display text-4xl font-bold">My Library</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="font-display text-4xl font-bold">My Library</h1>
+            <Button variant="outline" size="sm" asChild>
+              <a href="/defaultBookLibrary.csv" download>
+                Download CSV template
+              </a>
+            </Button>
+          </div>
           <p className="text-muted-foreground mt-2 font-body">
             Your personal book collection
           </p>
@@ -893,11 +900,6 @@ const Library = () => {
               />
               <Button onClick={() => importInputRef.current?.click()} disabled={importing}>
                 {importing ? "Importing..." : "Import Goodreads CSV"}
-              </Button>
-              <Button variant="outline" asChild>
-                <a href="/defaultBookLibrary.csv" download>
-                  Download CSV template
-                </a>
               </Button>
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Checkbox

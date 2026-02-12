@@ -16,8 +16,8 @@
   [data-theme="default"] {
     --font-display: 'DM Serif Display', serif;
     --font-body: 'DM Sans', sans-serif;
-    --theme-hero-image: none;
-    --theme-backdrop-image: none;
+    --theme-hero-image: url("/images/themes/shelf1.jpg");
+    --theme-backdrop-image: url("/images/themes/shelf1.jpg");
 
     --background: 40 30% 97%;
     --foreground: 30 20% 12%;
@@ -54,8 +54,8 @@
   [data-theme="fantasy"] {
     --font-display: 'Playfair Display', serif;
     --font-body: 'Source Serif 4', serif;
-    --theme-hero-image: none;
-    --theme-backdrop-image: none;
+    --theme-hero-image: url("/images/themes/fantasy2.jpg");
+    --theme-backdrop-image: url("/images/themes/fantasy1.jpg");
 
     --background: 142 18% 89%;
     --foreground: 210 12% 19%;
@@ -166,8 +166,8 @@
   [data-theme="romance"] {
     --font-display: 'Cormorant Garamond', serif;
     --font-body: 'Lora', serif;
-    --theme-hero-image: url("/images/themes/romance2.jpg");
-    --theme-backdrop-image: url("/images/themes/romance1.jpg");
+    --theme-hero-image: url("/images/themes/romance6.jpg");
+    --theme-backdrop-image: url("/images/themes/romance6.jpg");
 
     --background: 20 35% 96%;
     --foreground: 340 25% 22%;
@@ -247,7 +247,7 @@
   }
 
   .theme-hero-image {
-    background-image: var(--theme-hero-image);
+    background-image: var(--theme-hero-image), url("/images/themes/shelf1.jpg");
     background-size: cover;
     background-position: center;
     opacity: 0.18;
@@ -275,6 +275,7 @@
       radial-gradient(circle at 10% 10%, hsl(var(--primary) / 0.18), transparent 45%),
       radial-gradient(circle at 90% 20%, hsl(var(--accent) / 0.16), transparent 40%),
       linear-gradient(180deg, hsl(var(--background) / 0.98), hsl(var(--background) / 0.92));
+    pointer-events: none;
   }
 
   .theme-page::after {
@@ -282,7 +283,7 @@
     position: fixed;
     inset: -10%;
     z-index: -1;
-    background-image: var(--theme-backdrop-image);
+    background-image: var(--theme-backdrop-image), url("/images/themes/shelf1.jpg");
     background-size: cover;
     background-position: center;
     opacity: 0.28;
@@ -310,16 +311,18 @@
 
   [data-theme="fantasy"] .theme-page::after {
     background-image:
+      var(--theme-backdrop-image),
       radial-gradient(circle at 14% 28%, hsl(var(--secondary) / 0.16) 1px, transparent 1.4px),
       radial-gradient(circle at 84% 22%, hsl(var(--accent) / 0.2) 1px, transparent 1.6px),
       radial-gradient(circle at 24% 78%, hsl(var(--primary) / 0.13) 1px, transparent 1.5px),
       radial-gradient(circle at 76% 74%, hsl(var(--secondary) / 0.14) 1px, transparent 1.4px),
       linear-gradient(115deg, transparent 0 46%, hsl(var(--primary) / 0.045) 47% 49%, transparent 50% 100%),
       linear-gradient(245deg, transparent 0 44%, hsl(var(--secondary) / 0.05) 45% 47%, transparent 48% 100%);
-    background-size: 260px 260px, 240px 240px, 300px 300px, 280px 280px, 460px 460px, 420px 420px;
+    background-size: cover, 260px 260px, 240px 240px, 300px 300px, 280px 280px, 460px 460px, 420px 420px;
+    background-position: center, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0;
     opacity: 0.28;
     filter: none;
-    mix-blend-mode: normal;
+    mix-blend-mode: multiply;
   }
 
   [data-theme="fantasy"] .bg-primary {

@@ -319,16 +319,21 @@ Homepage and theme preview cards use static images from:
 
 - `public/images/themes/`
 
-New supported filenames:
+Homepage faded theme layer now uses:
 
-- `fantasy4.jpg`
-- `fantasy6.jpg`
-- `romance4.jpg`
-- `romance6.jpg`
+- Classic (`default`) -> `shelf1.jpg`
+- Romance -> `romance6.jpg`
 
-If any of these files are missing, the UI falls back to the genre default image:
+If you are adding/replacing local Downloads assets, place files at:
 
-- Fantasy -> `fantasy1.jpg`
-- Romance -> `romance1.jpg`
+- `public/images/themes/shelf1.jpg`
+- `public/images/themes/romance6.jpg`
+
+Note: in this repo, `shelf1.jpg` may be a placeholder copy. Replace it with your real `shelf1` image from Downloads using the exact filename above.
+If your source files are `.png` instead of `.jpg`, keep them in the same folder and update the paths in `src/index.css`.
+
+If the primary image is missing, the UI falls back to the default faded image:
+
+- `public/images/themes/shelf1.jpg`
 
 This keeps layout stable in development and production while allowing new images to be added incrementally.

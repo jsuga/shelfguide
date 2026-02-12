@@ -167,7 +167,7 @@ const Index = () => {
   const { theme, setTheme } = useTheme();
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
 
-  const getThemeFallback = (themeId: GenreTheme) => `/images/themes/${themeId}1.jpg`;
+  const getThemeFallback = (_themeId: GenreTheme) => "/images/themes/shelf1.jpg";
   const getImageSrc = (themeId: GenreTheme, src: string) =>
     failedImages[src] ? getThemeFallback(themeId) : src;
 
@@ -176,7 +176,7 @@ const Index = () => {
   };
 
   return (
-    <main className="pt-16 theme-page">
+    <main className="pt-16">
       {/* ═══ Hero ═══ */}
       <section className="relative min-h-[90vh] flex items-center justify-center overflow-hidden">
         {/* Decorative blobs */}
