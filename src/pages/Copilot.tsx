@@ -530,15 +530,18 @@ const Copilot = () => {
     };
 
     if (userId) {
+      if (!entry.title || !entry.decision) {
+        setCloudNotice("Feedback missing required fields; not queued.");
+        return;
+      }
       const { error } = await supabase
         .from("copilot_feedback")
         .insert([{ ...entry, user_id: userId }]);
       if (error) {
-        toast.error(`Could not save feedback: ${error.message}. Queued for retry.`);
         const next = [entry, ...feedbackEntries].slice(0, 50);
         setFeedbackEntries(next);
         saveLocalFeedback(next);
-        enqueueFeedbackSync(entry);
+        enqueueFeedbackSync(userId, entry);
         setCloudNotice("Feedback queued for cloud sync.");
         return;
       }
@@ -581,7 +584,7 @@ const Copilot = () => {
         const nextBooks = [newBook, ...books];
         setBooks(nextBooks);
         setLocalBooks(nextBooks);
-        enqueueLibrarySync([newBook], "copilot_add_to_library");
+        enqueueLibrarySync(userId, [newBook], "copilot_add_to_library");
         setCloudNotice("Library change queued for cloud sync.");
         return;
       }

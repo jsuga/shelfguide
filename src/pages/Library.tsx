@@ -23,6 +23,7 @@ import {
   retryAsync,
   upsertBooksToCloud,
 } from "@/lib/cloudSync";
+import { buildBookDedupeKey, normalizeDedupeValue } from "@/lib/bookDedupe";
 
 type LibraryBook = {
   id?: string;
@@ -312,8 +313,6 @@ const Library = () => {
   const normalizeHeader = (value: string) =>
     value.trim().toLowerCase().replace(/[\s-]+/g, "_");
 
-  const normalizeKey = (value: string) => value.trim().toLowerCase();
-
   const demoBooks: LibraryBook[] = [
     {
       title: "The Name of the Wind",
@@ -378,10 +377,10 @@ const Library = () => {
     }
     setSeedingDemo(true);
     const existingKeys = new Set(
-      books.map((book) => `${normalizeKey(book.title)}|${normalizeKey(book.author)}`)
+      books.map((book) => buildBookDedupeKey(book))
     );
     const toInsert = demoBooks.filter(
-      (book) => !existingKeys.has(`${normalizeKey(book.title)}|${normalizeKey(book.author)}`)
+      (book) => !existingKeys.has(buildBookDedupeKey(book))
     );
     if (toInsert.length === 0) {
       toast.success("Demo library already added.");
@@ -399,7 +398,7 @@ const Library = () => {
   };
 
   const mapShelfToStatus = (shelf: string) => {
-    const normalized = normalizeKey(shelf);
+    const normalized = normalizeDedupeValue(shelf);
     if (normalized === "to-read") return "tbr";
     if (normalized === "currently-reading") return "reading";
     if (normalized === "read") return "finished";
@@ -501,7 +500,7 @@ const Library = () => {
       if (!userIdValue) {
         const nextBooks = [...books, ...booksFromCsv];
         persistBooks(nextBooks);
-        enqueueLibrarySync(booksFromCsv, "manual_csv_upload", file.name);
+        enqueueLibrarySync(userIdValue, booksFromCsv, "manual_csv_upload", file.name);
         setCloudNotice("Not signed in. Saved locally and queued for cloud sync.");
         return;
       }
@@ -515,7 +514,7 @@ const Library = () => {
         toast.error(`Upload failed: ${error.message}. Saved locally and queued for retry.`);
         const nextBooks = [...books, ...booksFromCsv];
         persistBooks(nextBooks);
-        enqueueLibrarySync(booksFromCsv, "manual_csv_upload", file.name);
+        enqueueLibrarySync(userIdValue, booksFromCsv, "manual_csv_upload", file.name);
         setCloudNotice("Cloud sync pending. We will retry automatically.");
         return;
       }
@@ -633,12 +632,7 @@ const Library = () => {
     const existing = books;
     const keyToIndex = new Map<string, number>();
     existing.forEach((book, index) => {
-      if (book.isbn) keyToIndex.set(`isbn:${normalizeKey(book.isbn)}`, index);
-      if (book.isbn13) keyToIndex.set(`isbn13:${normalizeKey(book.isbn13)}`, index);
-      keyToIndex.set(
-        `title:${normalizeKey(book.title)}|${normalizeKey(book.author)}`,
-        index
-      );
+      keyToIndex.set(buildBookDedupeKey(book), index);
     });
 
     let added = 0;
@@ -646,14 +640,12 @@ const Library = () => {
     const upserts: LibraryBook[] = [];
 
     enriched.forEach((book) => {
-      const key =
-        (book.isbn13 && `isbn13:${normalizeKey(book.isbn13)}`) ||
-        (book.isbn && `isbn:${normalizeKey(book.isbn)}`) ||
-        `title:${normalizeKey(book.title)}|${normalizeKey(book.author)}`;
+      const key = buildBookDedupeKey(book);
       const existingIndex = keyToIndex.get(key);
       if (existingIndex === undefined) {
         added += 1;
         upserts.push(book);
+        keyToIndex.set(key, existing.length + upserts.length - 1);
         return;
       }
 
@@ -679,7 +671,7 @@ const Library = () => {
       const { error } = await retryAsync(() => upsertBooksToCloud(userId, upserts), 1, 350);
       if (error) {
         failures.push(error.message);
-        enqueueLibrarySync(upserts, "goodreads_csv", file.name);
+        enqueueLibrarySync(userId, upserts, "goodreads_csv", file.name);
         setCloudNotice("Goodreads import queued for background sync.");
       }
       await loadBooks(userId);
@@ -695,13 +687,11 @@ const Library = () => {
     } else {
       const nextBooks = [...books];
       upserts.forEach((book) => {
-        const key =
-          (book.isbn13 && `isbn13:${normalizeKey(book.isbn13)}`) ||
-          (book.isbn && `isbn:${normalizeKey(book.isbn)}`) ||
-          `title:${normalizeKey(book.title)}|${normalizeKey(book.author)}`;
+        const key = buildBookDedupeKey(book);
         const existingIndex = keyToIndex.get(key);
         if (existingIndex === undefined) {
           nextBooks.push(book);
+          keyToIndex.set(key, nextBooks.length - 1);
         } else {
           nextBooks[existingIndex] = book;
         }

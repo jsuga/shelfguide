@@ -3,6 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 export const SYNC_EVENT = "shelfguide-sync-updated";
 const LIBRARY_QUEUE_KEY = "shelfguide-pending-library-sync";
 const FEEDBACK_QUEUE_KEY = "shelfguide-pending-feedback-sync";
+const MAX_SYNC_ATTEMPTS = 5;
+const ORPHANED_QUEUE_ERROR = "Queued item missing user_id. Dismiss and recreate while signed in.";
 
 export type CloudBookUpsert = {
   id?: string;
@@ -34,7 +36,13 @@ export type FeedbackQueueEntry = {
 };
 
 type LibrarySyncTask = {
+  user_id: string | null;
   id: string;
+  operation: "library_upsert";
+  status: "pending" | "needs_attention";
+  attempt_count: number;
+  last_error: string | null;
+  last_attempt_at: string | null;
   source: string;
   fileName?: string;
   books: CloudBookUpsert[];
@@ -42,8 +50,23 @@ type LibrarySyncTask = {
 };
 
 type FeedbackSyncTask = {
+  user_id: string | null;
   id: string;
+  operation: "feedback_insert";
+  status: "pending" | "needs_attention";
+  attempt_count: number;
+  last_error: string | null;
+  last_attempt_at: string | null;
   entry: FeedbackQueueEntry;
+  created_at: string;
+};
+
+export type NeedsAttentionItem = {
+  id: string;
+  operation: "library_upsert" | "feedback_insert";
+  source: string;
+  error: string;
+  attempts: number;
   created_at: string;
 };
 
@@ -57,6 +80,64 @@ const readJson = <T>(key: string): T[] => {
   }
 };
 
+const readLibraryQueue = () =>
+  readJson<Partial<LibrarySyncTask>>(LIBRARY_QUEUE_KEY).map((task) => ({
+    user_id: task.user_id ?? null,
+    id: task.id || nextId(),
+    operation: "library_upsert" as const,
+    status:
+      task.user_id == null
+        ? "needs_attention"
+        : task.status === "needs_attention"
+        ? "needs_attention"
+        : "pending",
+    attempt_count:
+      task.user_id == null
+        ? MAX_SYNC_ATTEMPTS
+        : Number.isFinite(task.attempt_count)
+        ? Number(task.attempt_count)
+        : 0,
+    last_error: task.user_id == null ? ORPHANED_QUEUE_ERROR : task.last_error ?? null,
+    last_attempt_at: task.last_attempt_at ?? null,
+    source: task.source || "library_sync",
+    fileName: task.fileName,
+    books: Array.isArray(task.books) ? (task.books as CloudBookUpsert[]) : [],
+    created_at: task.created_at || new Date().toISOString(),
+  }));
+
+const readFeedbackQueue = () =>
+  readJson<Partial<FeedbackSyncTask>>(FEEDBACK_QUEUE_KEY).map((task) => ({
+    user_id: task.user_id ?? null,
+    id: task.id || nextId(),
+    operation: "feedback_insert" as const,
+    status:
+      task.user_id == null
+        ? "needs_attention"
+        : task.status === "needs_attention"
+        ? "needs_attention"
+        : "pending",
+    attempt_count:
+      task.user_id == null
+        ? MAX_SYNC_ATTEMPTS
+        : Number.isFinite(task.attempt_count)
+        ? Number(task.attempt_count)
+        : 0,
+    last_error: task.user_id == null ? ORPHANED_QUEUE_ERROR : task.last_error ?? null,
+    last_attempt_at: task.last_attempt_at ?? null,
+    entry:
+      task.entry ||
+      ({
+        book_id: null,
+        title: "",
+        author: null,
+        genre: null,
+        tags: [],
+        decision: "accepted",
+        created_at: new Date().toISOString(),
+      } as FeedbackQueueEntry),
+    created_at: task.created_at || new Date().toISOString(),
+  }));
+
 const writeJson = <T>(key: string, value: T[]) => {
   localStorage.setItem(key, JSON.stringify(value));
   window.dispatchEvent(new Event(SYNC_EVENT));
@@ -65,10 +146,49 @@ const writeJson = <T>(key: string, value: T[]) => {
 const nextId = () =>
   `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-export const getPendingSyncCounts = () => {
-  const library = readJson<LibrarySyncTask>(LIBRARY_QUEUE_KEY).length;
-  const feedback = readJson<FeedbackSyncTask>(FEEDBACK_QUEUE_KEY).length;
-  return { library, feedback, total: library + feedback };
+export const getPendingSyncCounts = (userId: string | null) => {
+  const library = readLibraryQueue().filter(
+    (task) => task.user_id === userId && task.status === "pending"
+  ).length;
+  const feedback = readFeedbackQueue().filter(
+    (task) => task.user_id === userId && task.status === "pending"
+  ).length;
+  const needsAttention =
+    readLibraryQueue().filter(
+      (task) => task.user_id === userId && task.status === "needs_attention"
+    ).length +
+    readFeedbackQueue().filter(
+      (task) => task.user_id === userId && task.status === "needs_attention"
+    ).length;
+  return { library, feedback, total: library + feedback, needsAttention };
+};
+
+export const getNeedsAttentionItems = (userId: string | null): NeedsAttentionItem[] => {
+  const libraryItems = readLibraryQueue()
+    .filter((task) => task.user_id === userId && task.status === "needs_attention")
+    .map((task) => ({
+      id: task.id,
+      operation: task.operation,
+      source: task.source || "Library sync",
+      error: task.last_error || "Unknown error",
+      attempts: task.attempt_count,
+      created_at: task.created_at,
+    }));
+
+  const feedbackItems = readFeedbackQueue()
+    .filter((task) => task.user_id === userId && task.status === "needs_attention")
+    .map((task) => ({
+      id: task.id,
+      operation: task.operation,
+      source: "Copilot feedback",
+      error: task.last_error || "Unknown error",
+      attempts: task.attempt_count,
+      created_at: task.created_at,
+    }));
+
+  return [...libraryItems, ...feedbackItems].sort((a, b) =>
+    b.created_at.localeCompare(a.created_at)
+  );
 };
 
 export const retryAsync = async <T>(
@@ -118,20 +238,33 @@ export const upsertBooksToCloud = async (userId: string, books: CloudBookUpsert[
   return supabase
     .from("books")
     .upsert(
-      books.map((book) => ({ ...book, user_id: userId })),
+      books.map((book) => ({
+        ...book,
+        title: book.title.trim(),
+        author: book.author.trim(),
+        isbn13: book.isbn13?.trim() || null,
+        user_id: userId,
+      })),
       { onConflict: "user_id,dedupe_key", ignoreDuplicates: false }
     );
 };
 
 export const enqueueLibrarySync = (
+  userId: string | null,
   books: CloudBookUpsert[],
   source: string,
   fileName?: string
 ) => {
-  const existing = readJson<LibrarySyncTask>(LIBRARY_QUEUE_KEY);
+  const existing = readLibraryQueue();
   const next: LibrarySyncTask[] = [
     {
+      user_id: userId,
       id: nextId(),
+      operation: "library_upsert",
+      status: "pending",
+      attempt_count: 0,
+      last_error: null,
+      last_attempt_at: null,
       source,
       fileName,
       books,
@@ -142,17 +275,27 @@ export const enqueueLibrarySync = (
   writeJson(LIBRARY_QUEUE_KEY, next);
 };
 
-export const enqueueFeedbackSync = (entry: FeedbackQueueEntry) => {
-  const existing = readJson<FeedbackSyncTask>(FEEDBACK_QUEUE_KEY);
+export const enqueueFeedbackSync = (userId: string | null, entry: FeedbackQueueEntry) => {
+  const existing = readFeedbackQueue();
   const next: FeedbackSyncTask[] = [
-    { id: nextId(), entry, created_at: new Date().toISOString() },
+    {
+      user_id: userId,
+      id: nextId(),
+      operation: "feedback_insert",
+      status: "pending",
+      attempt_count: 0,
+      last_error: null,
+      last_attempt_at: null,
+      entry,
+      created_at: new Date().toISOString(),
+    },
     ...existing,
   ];
   writeJson(FEEDBACK_QUEUE_KEY, next);
 };
 
 export const flushLibraryQueue = async (userId: string) => {
-  const queue = readJson<LibrarySyncTask>(LIBRARY_QUEUE_KEY);
+  const queue = readLibraryQueue();
   if (!queue.length) return { synced: 0, failed: 0, errorMessages: [] as string[] };
 
   const remaining: LibrarySyncTask[] = [];
@@ -161,9 +304,27 @@ export const flushLibraryQueue = async (userId: string) => {
   const errorMessages: string[] = [];
 
   for (const task of queue.reverse()) {
+    if (task.user_id !== userId) {
+      remaining.push(task);
+      continue;
+    }
+    if (task.status === "needs_attention" || task.attempt_count >= MAX_SYNC_ATTEMPTS) {
+      remaining.push({
+        ...task,
+        status: "needs_attention",
+      });
+      continue;
+    }
     const { error } = await retryAsync(() => upsertBooksToCloud(userId, task.books), 1, 450);
     if (error) {
-      remaining.push(task);
+      const nextAttempt = task.attempt_count + 1;
+      remaining.push({
+        ...task,
+        attempt_count: nextAttempt,
+        last_error: error.message,
+        last_attempt_at: new Date().toISOString(),
+        status: nextAttempt >= MAX_SYNC_ATTEMPTS ? "needs_attention" : "pending",
+      });
       failed += 1;
       errorMessages.push(error.message);
       continue;
@@ -176,7 +337,7 @@ export const flushLibraryQueue = async (userId: string) => {
 };
 
 export const flushFeedbackQueue = async (userId: string) => {
-  const queue = readJson<FeedbackSyncTask>(FEEDBACK_QUEUE_KEY);
+  const queue = readFeedbackQueue();
   if (!queue.length) return { synced: 0, failed: 0, errorMessages: [] as string[] };
 
   const remaining: FeedbackSyncTask[] = [];
@@ -185,6 +346,29 @@ export const flushFeedbackQueue = async (userId: string) => {
   const errorMessages: string[] = [];
 
   for (const task of queue.reverse()) {
+    if (task.user_id !== userId) {
+      remaining.push(task);
+      continue;
+    }
+    if (task.status === "needs_attention" || task.attempt_count >= MAX_SYNC_ATTEMPTS) {
+      remaining.push({
+        ...task,
+        status: "needs_attention",
+      });
+      continue;
+    }
+    if (!task.entry.title || !task.entry.decision) {
+      remaining.push({
+        ...task,
+        attempt_count: MAX_SYNC_ATTEMPTS,
+        last_error: "Missing required feedback fields.",
+        last_attempt_at: new Date().toISOString(),
+        status: "needs_attention",
+      });
+      failed += 1;
+      errorMessages.push("Missing required feedback fields.");
+      continue;
+    }
     const { error } = await retryAsync(
       () =>
         supabase.from("copilot_feedback").insert([
@@ -197,7 +381,14 @@ export const flushFeedbackQueue = async (userId: string) => {
       450
     );
     if (error) {
-      remaining.push(task);
+      const nextAttempt = task.attempt_count + 1;
+      remaining.push({
+        ...task,
+        attempt_count: nextAttempt,
+        last_error: error.message,
+        last_attempt_at: new Date().toISOString(),
+        status: nextAttempt >= MAX_SYNC_ATTEMPTS ? "needs_attention" : "pending",
+      });
       failed += 1;
       errorMessages.push(error.message);
       continue;
@@ -223,4 +414,15 @@ export const flushAllPendingSync = async () => {
     failed: library.failed + feedback.failed,
     errorMessages: [...library.errorMessages, ...feedback.errorMessages],
   };
+};
+
+export const clearNeedsAttentionItems = (userId: string | null) => {
+  const libraryRemaining = readLibraryQueue().filter(
+    (task) => !(task.user_id === userId && task.status === "needs_attention")
+  );
+  const feedbackRemaining = readFeedbackQueue().filter(
+    (task) => !(task.user_id === userId && task.status === "needs_attention")
+  );
+  writeJson(LIBRARY_QUEUE_KEY, libraryRemaining);
+  writeJson(FEEDBACK_QUEUE_KEY, feedbackRemaining);
 };

@@ -6,7 +6,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { flushAllPendingSync, getAuthenticatedUserId, retryAsync } from "@/lib/cloudSync";
+import {
+  enqueueLibrarySync,
+  flushAllPendingSync,
+  getAuthenticatedUserId,
+  retryAsync,
+  upsertBooksToCloud,
+} from "@/lib/cloudSync";
 import {
   applyTbrFilters,
   dedupeCandidatesAgainstOwned,
@@ -327,17 +333,13 @@ const TbrWheel = () => {
     };
 
     if (userId) {
-      const { data, error } = await supabase
-        .from("books")
-        .insert([{ ...payload, user_id: userId }])
-        .select("*")
-        .single();
+      const { error } = await upsertBooksToCloud(userId, [payload]);
       if (error) {
-        toast.error("Could not add this book to your library.");
+        enqueueLibrarySync(userId, [payload], "tbr_wheel_add");
+        setCloudNotice("TBR add queued for cloud sync.");
         return;
       }
-      const nextBooks = [data as LibraryBook, ...books];
-      setBooks(nextBooks);
+      await loadBooks(userId);
       setExternalCandidates((current) =>
         current.filter(
           (entry) =>

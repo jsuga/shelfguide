@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Palette } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -130,8 +130,11 @@ const listToString = (value: string[] | null | undefined) =>
 
 const Preferences = () => {
   const { theme, setTheme } = useTheme();
+  const showDiagnostics =
+    import.meta.env.DEV || import.meta.env.VITE_ENABLE_SYNC_DIAGNOSTICS === "true";
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [syncUserId, setSyncUserId] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [preferredGenres, setPreferredGenres] = useState("");
@@ -140,8 +143,21 @@ const Preferences = () => {
   const [preferredPace, setPreferredPace] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [savingPrefs, setSavingPrefs] = useState(false);
-  const [pendingSync, setPendingSync] = useState(getPendingSyncCounts());
+  const [pendingSync, setPendingSync] = useState(getPendingSyncCounts(null));
   const [syncingNow, setSyncingNow] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<{
+    checkedAt: string | null;
+    dedupeKeyColumn: boolean | null;
+    upsertConflictPath: boolean | null;
+    rlsLikely: boolean | null;
+    note: string | null;
+  }>({
+    checkedAt: null,
+    dedupeKeyColumn: null,
+    upsertConflictPath: null,
+    rlsLikely: null,
+    note: null,
+  });
 
   const getThemeFallback = (_themeId: GenreTheme) => "/images/themes/shelf1.jpg";
   const getImageSrc = (themeId: GenreTheme, src: string) =>
@@ -151,9 +167,9 @@ const Preferences = () => {
     setFailedImages((prev) => (prev[src] ? prev : { ...prev, [src]: true }));
   };
 
-  const refreshPendingSync = () => {
-    setPendingSync(getPendingSyncCounts());
-  };
+  const refreshPendingSync = useCallback(() => {
+    setPendingSync(getPendingSyncCounts(syncUserId));
+  }, [syncUserId]);
 
   const handleRetrySync = async () => {
     setSyncingNow(true);
@@ -167,11 +183,77 @@ const Preferences = () => {
     toast.success("Sync retry completed.");
   };
 
+  const runDiagnostics = async () => {
+    const userId = await getAuthenticatedUserId();
+    if (!userId) {
+      setDiagnostics({
+        checkedAt: new Date().toISOString(),
+        dedupeKeyColumn: null,
+        upsertConflictPath: null,
+        rlsLikely: null,
+        note: "Sign in to run diagnostics.",
+      });
+      return;
+    }
+
+    const result = {
+      checkedAt: new Date().toISOString(),
+      dedupeKeyColumn: false,
+      upsertConflictPath: null as boolean | null,
+      rlsLikely: false,
+      note: null as string | null,
+    };
+
+    const { data, error } = await supabase
+      .from("books")
+      .select("id,title,author,isbn13,dedupe_key")
+      .eq("user_id", userId)
+      .limit(1);
+
+    if (!error) {
+      result.dedupeKeyColumn = true;
+      result.rlsLikely = true;
+    } else {
+      result.note = `Books select failed: ${error.message}`;
+      setDiagnostics(result);
+      return;
+    }
+
+    const sample = data?.[0];
+    if (!sample) {
+      result.note = "No book rows available; upsert conflict path not executed.";
+      setDiagnostics(result);
+      return;
+    }
+
+    const { error: upsertError } = await supabase
+      .from("books")
+      .upsert(
+        [
+          {
+            id: sample.id,
+            user_id: userId,
+            title: sample.title,
+            author: sample.author,
+            isbn13: sample.isbn13,
+          },
+        ],
+        { onConflict: "user_id,dedupe_key", ignoreDuplicates: false }
+      );
+
+    result.upsertConflictPath = !upsertError;
+    if (upsertError) {
+      result.note = `Upsert conflict check failed: ${upsertError.message}`;
+    }
+    setDiagnostics(result);
+  };
+
   useEffect(() => {
     const init = async () => {
       const { data } = await supabase.auth.getSession();
       const user = data.session?.user ?? null;
       setUserEmail(user?.email ?? null);
+      setSyncUserId(user?.id ?? null);
       const storedUsername = (user?.user_metadata as { username?: string })?.username || "";
       setUsername(storedUsername);
       if (user?.id) {
@@ -197,6 +279,7 @@ const Preferences = () => {
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       const user = session?.user ?? null;
       setUserEmail(user?.email ?? null);
+      setSyncUserId(user?.id ?? null);
       const storedUsername = (user?.user_metadata as { username?: string })?.username || "";
       setUsername(storedUsername);
       if (user?.id) {
@@ -231,7 +314,11 @@ const Preferences = () => {
     return () => {
       window.removeEventListener(SYNC_EVENT, onSyncUpdate);
     };
-  }, []);
+  }, [refreshPendingSync]);
+
+  useEffect(() => {
+    refreshPendingSync();
+  }, [refreshPendingSync]);
 
   const handleSave = async () => {
     if (!username.trim()) {
@@ -295,12 +382,30 @@ const Preferences = () => {
         <section className="rounded-xl border border-border/60 bg-card/70 p-6 lg:col-span-2">
           <h2 className="font-display text-2xl font-bold mb-2">Sync Status</h2>
           <p className="text-sm text-muted-foreground font-body mb-4">
-            Pending library sync: {pendingSync.library} | pending feedback sync: {pendingSync.feedback}
+            Pending library sync: {pendingSync.library} | pending feedback sync: {pendingSync.feedback} | needs attention: {pendingSync.needsAttention}
           </p>
           <Button variant="outline" onClick={handleRetrySync} disabled={syncingNow}>
             {syncingNow ? "Retrying..." : "Retry sync"}
           </Button>
         </section>
+        {showDiagnostics && (
+          <section className="rounded-xl border border-border/60 bg-card/70 p-6 lg:col-span-2">
+            <h2 className="font-display text-2xl font-bold mb-2">Diagnostics</h2>
+            <p className="text-sm text-muted-foreground font-body mb-4">
+              Dev-only checks for sync/dedupe readiness.
+            </p>
+            <div className="text-sm text-muted-foreground space-y-1 mb-4">
+              <div>dedupe_key column: {diagnostics.dedupeKeyColumn === null ? "Not checked" : diagnostics.dedupeKeyColumn ? "OK" : "Failed"}</div>
+              <div>Upsert conflict path: {diagnostics.upsertConflictPath === null ? "Not checked" : diagnostics.upsertConflictPath ? "OK" : "Failed"}</div>
+              <div>RLS likely active: {diagnostics.rlsLikely === null ? "Not checked" : diagnostics.rlsLikely ? "Likely" : "Failed"}</div>
+              <div>Last check: {diagnostics.checkedAt || "Never"}</div>
+              {diagnostics.note && <div>Note: {diagnostics.note}</div>}
+            </div>
+            <Button variant="outline" onClick={() => void runDiagnostics()}>
+              Run diagnostics
+            </Button>
+          </section>
+        )}
 
         <section className="rounded-xl border border-border/60 bg-card/70 p-6">
           <h2 className="font-display text-2xl font-bold mb-2">Profile</h2>
