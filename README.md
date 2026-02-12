@@ -226,6 +226,28 @@ Go to **My Library** and use the **Goodreads Import** card to upload the CSV. Th
 
 Duplicates are merged by ISBN/ISBN13 (preferred) or Title+Author.
 
+### Default physical-library CSV template
+
+You can download a starter CSV template from the app:
+
+- Go to **My Library** -> **Connect / Import** -> **Download CSV template**
+- Or use the static asset directly: `/defaultBookLibrary.csv`
+
+Template file location in repo:
+
+- `public/defaultBookLibrary.csv`
+
+### Manual library CSV columns
+
+Supported columns for manual library import (`Add Library` CSV flow):
+
+- `title` (required)
+- `author` (required)
+- `genre` (optional)
+- `series_name` (optional)
+- `is_first_in_series` (optional; accepted truthy values include `true`, `yes`, `1`)
+- `status` (optional; defaults to `want_to_read`)
+
 ## Session 5 Updates
 
 ### TBR Wheel
@@ -290,3 +312,23 @@ Duplicates are merged by ISBN/ISBN13 (preferred) or Title+Author.
 ### Validation
 
 - `npm run lint` passed.
+
+## Homepage Genre Image Assets
+
+Homepage and theme preview cards use static images from:
+
+- `public/images/themes/`
+
+New supported filenames:
+
+- `fantasy4.jpg`
+- `fantasy6.jpg`
+- `romance4.jpg`
+- `romance6.jpg`
+
+If any of these files are missing, the UI falls back to the genre default image:
+
+- Fantasy -> `fantasy1.jpg`
+- Romance -> `romance1.jpg`
+
+This keeps layout stable in development and production while allowing new images to be added incrementally.

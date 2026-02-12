@@ -17,7 +17,6 @@ import {
   TBR_WHEEL_GENRES,
   type TbrFirstInSeriesFilter,
   type TbrOwnershipMode,
-  type TbrStatusFilter,
 } from "@/lib/tbrWheel";
 
 type LibraryBook = TbrBook & {
@@ -51,10 +50,8 @@ const setLocalBooks = (books: LibraryBook[]) => {
 const defaultFilters: TbrFilters = {
   genres: ["Any"],
   firstInSeries: "any",
-  status: "tbr",
   ownership: "library",
   length: "Any",
-  rating: "Any",
 };
 
 type CopilotRecommendation = {
@@ -187,21 +184,16 @@ const TbrWheel = () => {
     };
   }, []);
 
-  const sourceBooks = useMemo(
-    () => (appliedFilters.ownership === "library" ? books : externalCandidates),
-    [appliedFilters.ownership, books, externalCandidates]
-  );
-
-  const effectiveFilters = useMemo(() => {
-    if (appliedFilters.ownership === "not_owned") {
-      return { ...appliedFilters, status: "tbr" as TbrStatusFilter };
-    }
-    return appliedFilters;
-  }, [appliedFilters]);
+  const sourceBooks = useMemo(() => {
+      if (appliedFilters.ownership === "library") {
+        return books.filter((book) => normalize(book.status || "") === "tbr");
+      }
+      return externalCandidates;
+    }, [appliedFilters.ownership, books, externalCandidates]);
 
   const filtered = useMemo(
-    () => applyTbrFilters(sourceBooks, effectiveFilters),
-    [sourceBooks, effectiveFilters]
+    () => applyTbrFilters(sourceBooks, appliedFilters),
+    [sourceBooks, appliedFilters]
   );
 
   const displayed = useMemo(() => {
@@ -285,7 +277,6 @@ const TbrWheel = () => {
     const next = {
       ...filters,
       length: filters.ownership === "library" ? "Any" : filters.length,
-      rating: filters.rating === ">=4" ? ">=4" : "Any",
     };
     setAppliedFilters(next);
     if (next.ownership === "not_owned") {
@@ -480,31 +471,6 @@ const TbrWheel = () => {
             </div>
 
             <div className="grid gap-2">
-              <label className="text-sm font-medium">Status</label>
-              <Select
-                value={filters.status}
-                onValueChange={(value) =>
-                  setFilters((prev) => ({
-                    ...prev,
-                    status: value as TbrStatusFilter,
-                  }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="tbr">TBR</SelectItem>
-                  <SelectItem value="reading">Reading</SelectItem>
-                  <SelectItem value="finished">Finished</SelectItem>
-                  <SelectItem value="want_to_read">Want to read</SelectItem>
-                  <SelectItem value="paused">Paused</SelectItem>
-                  <SelectItem value="any">Any</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid gap-2">
               <label className="text-sm font-medium">Ownership</label>
               <Select
                 value={filters.ownership}
@@ -526,7 +492,7 @@ const TbrWheel = () => {
               </Select>
               {filters.ownership === "not_owned" && (
                 <div className="text-xs text-muted-foreground">
-                  Status is treated as TBR intent in this mode.
+                  In-library mode always spins from your TBR books.
                 </div>
               )}
             </div>
@@ -547,27 +513,6 @@ const TbrWheel = () => {
                 </Select>
               </div>
             )}
-
-            <div className="grid gap-2">
-              <label className="text-sm font-medium">Rating threshold</label>
-              <Select
-                value={filters.rating}
-                onValueChange={(value) => setFilters((prev) => ({ ...prev, rating: value as TbrFilters["rating"] }))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select rating" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Any">Any</SelectItem>
-                  <SelectItem value=">=4">&gt;=4 stars</SelectItem>
-                </SelectContent>
-              </Select>
-              {filters.rating !== "Any" && (
-                <div className="text-xs text-muted-foreground">
-                  Only books with a rating will be included.
-                </div>
-              )}
-            </div>
 
             <Button onClick={() => void applyFilters()} disabled={loadingExternal}>
               {loadingExternal ? "Loading candidates..." : "Apply filters"}

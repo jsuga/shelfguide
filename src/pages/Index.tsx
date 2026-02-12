@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
 import {
   BookOpen,
@@ -22,7 +23,7 @@ const themeCards: {
   name: string;
   description: string;
   colors: { bg: string; primary: string; accent: string };
-  images: [string, string, string];
+  images: string[];
   detail: string;
 }[] = [
   {
@@ -38,6 +39,8 @@ const themeCards: {
       "/images/themes/fantasy1.jpg",
       "/images/themes/fantasy2.jpg",
       "/images/themes/fantasy3.jpg",
+      "/images/themes/fantasy4.jpg",
+      "/images/themes/fantasy6.jpg",
     ],
     detail: "Mossy glades, runes, and torchlit stonework.",
   },
@@ -86,6 +89,8 @@ const themeCards: {
       "/images/themes/romance1.jpg",
       "/images/themes/romance2.jpg",
       "/images/themes/romance3.jpg",
+      "/images/themes/romance4.jpg",
+      "/images/themes/romance6.jpg",
     ],
     detail: "Petals, handwritten notes, and golden hour light.",
   },
@@ -160,6 +165,15 @@ const fadeInUp = {
 
 const Index = () => {
   const { theme, setTheme } = useTheme();
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
+
+  const getThemeFallback = (themeId: GenreTheme) => `/images/themes/${themeId}1.jpg`;
+  const getImageSrc = (themeId: GenreTheme, src: string) =>
+    failedImages[src] ? getThemeFallback(themeId) : src;
+
+  const onImageError = (src: string) => {
+    setFailedImages((prev) => (prev[src] ? prev : { ...prev, [src]: true }));
+  };
 
   return (
     <main className="pt-16 theme-page">
@@ -300,6 +314,82 @@ const Index = () => {
                     </p>
                   </CardContent>
                 </Card>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ Genre Gallery ═══ */}
+      <section className="py-24 bg-secondary/20">
+        <div className="container mx-auto px-4">
+          <motion.div {...fadeInUp} className="text-center mb-14">
+            <h2 className="font-display text-3xl md:text-5xl font-bold mb-4">
+              Explore Genre Atmospheres
+            </h2>
+            <p className="text-muted-foreground text-lg max-w-2xl mx-auto font-body">
+              Preview the visual mood for each genre and apply it instantly.
+            </p>
+          </motion.div>
+
+          <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4 max-w-6xl mx-auto">
+            {themeCards.map((card, i) => (
+              <motion.div
+                key={card.id}
+                {...fadeInUp}
+                transition={{ duration: 0.5, delay: i * 0.08 }}
+              >
+                <button
+                  onClick={() => {
+                    setTheme(card.id);
+                    toast.success(`${card.name} theme applied!`);
+                  }}
+                  className={`w-full text-left rounded-xl overflow-hidden border-2 transition-all hover:scale-[1.03] ${
+                    theme === card.id
+                      ? "border-primary shadow-lg ring-2 ring-primary/30"
+                      : "border-transparent hover:border-border"
+                  }`}
+                >
+                  <div className="h-32 relative overflow-hidden">
+                    <img
+                      src={getImageSrc(card.id, card.images[0] || getThemeFallback(card.id))}
+                      onError={() => onImageError(card.images[0] || "")}
+                      alt={`${card.name} theme preview`}
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                    <div
+                      className="absolute inset-0"
+                      style={{
+                        background: `linear-gradient(145deg, ${card.colors.bg}cc, ${card.colors.accent}99)`,
+                      }}
+                    />
+                    <div className="absolute inset-x-3 top-3 flex items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-white/85 font-body">
+                      <span className="w-2 h-2 rounded-full" style={{ background: card.colors.primary }} />
+                      {card.name}
+                    </div>
+                    <div className="absolute bottom-3 left-3 right-3 grid grid-cols-4 gap-2">
+                      {card.images.slice(0, 4).map((img) => (
+                        <div key={`${card.id}-${img}`} className="h-8 rounded-md border border-white/30 bg-white/10 shadow-lg overflow-hidden">
+                          <img
+                            src={getImageSrc(card.id, img)}
+                            onError={() => onImageError(img)}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-card">
+                    <h3 className="font-display font-bold text-sm">{card.name}</h3>
+                    <p className="text-xs text-muted-foreground mt-1 font-body">
+                      {card.description}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground/80 mt-2 font-body">
+                      {card.detail}
+                    </p>
+                  </div>
+                </button>
               </motion.div>
             ))}
           </div>

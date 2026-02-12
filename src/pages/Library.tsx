@@ -869,6 +869,9 @@ const Library = () => {
             <p className="text-sm text-muted-foreground font-body mt-2">
               This is a CSV import (not an API connection yet). You can re-run it anytime.
             </p>
+            <p className="text-xs text-muted-foreground font-body mt-2">
+              Need a starter format for physical library uploads? Download the default template.
+            </p>
             <ol className="list-decimal pl-5 mt-4 space-y-2 text-sm text-muted-foreground">
               <li>Go to Goodreads &gt; My Books &gt; Import and Export.</li>
               <li>Export your library to CSV.</li>
@@ -890,6 +893,11 @@ const Library = () => {
               />
               <Button onClick={() => importInputRef.current?.click()} disabled={importing}>
                 {importing ? "Importing..." : "Import Goodreads CSV"}
+              </Button>
+              <Button variant="outline" asChild>
+                <a href="/defaultBookLibrary.csv" download>
+                  Download CSV template
+                </a>
               </Button>
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Checkbox

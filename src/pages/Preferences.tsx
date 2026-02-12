@@ -17,7 +17,7 @@ const themeCards: {
   name: string;
   description: string;
   colors: { bg: string; primary: string; accent: string };
-  images: [string, string, string];
+  images: string[];
   detail: string;
 }[] = [
   {
@@ -33,6 +33,8 @@ const themeCards: {
       "/images/themes/fantasy1.jpg",
       "/images/themes/fantasy2.jpg",
       "/images/themes/fantasy3.jpg",
+      "/images/themes/fantasy4.jpg",
+      "/images/themes/fantasy6.jpg",
     ],
     detail: "Mossy glades, runes, and torchlit stonework.",
   },
@@ -81,6 +83,8 @@ const themeCards: {
       "/images/themes/romance1.jpg",
       "/images/themes/romance2.jpg",
       "/images/themes/romance3.jpg",
+      "/images/themes/romance4.jpg",
+      "/images/themes/romance6.jpg",
     ],
     detail: "Petals, handwritten notes, and golden hour light.",
   },
@@ -120,6 +124,7 @@ const listToString = (value: string[] | null | undefined) =>
 
 const Preferences = () => {
   const { theme, setTheme } = useTheme();
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [saving, setSaving] = useState(false);
@@ -129,6 +134,14 @@ const Preferences = () => {
   const [preferredPace, setPreferredPace] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [savingPrefs, setSavingPrefs] = useState(false);
+
+  const getThemeFallback = (themeId: GenreTheme) => `/images/themes/${themeId}1.jpg`;
+  const getImageSrc = (themeId: GenreTheme, src: string) =>
+    failedImages[src] ? getThemeFallback(themeId) : src;
+
+  const onImageError = (src: string) => {
+    setFailedImages((prev) => (prev[src] ? prev : { ...prev, [src]: true }));
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -409,9 +422,11 @@ const Preferences = () => {
                   }`}
                 >
                   <div className="h-28 relative overflow-hidden">
-                    <div
-                      className="absolute inset-0 bg-cover bg-center"
-                      style={{ backgroundImage: `url(${t.images[0]})` }}
+                    <img
+                      src={getImageSrc(t.id, t.images[0] || getThemeFallback(t.id))}
+                      onError={() => onImageError(t.images[0] || "")}
+                      alt={`${t.name} theme preview`}
+                      className="absolute inset-0 h-full w-full object-cover"
                     />
                     <div
                       className="absolute inset-0"
@@ -424,12 +439,18 @@ const Preferences = () => {
                       {t.name}
                     </div>
                     <div className="absolute bottom-3 left-3 flex gap-2">
-                      {t.images.map((img, index) => (
+                      {t.images.slice(0, 4).map((img, index) => (
                         <div
                           key={`${t.id}-${index}`}
-                          className="h-8 w-10 rounded-md border border-white/30 bg-white/10 shadow-lg"
-                          style={{ backgroundImage: `url(${img})`, backgroundSize: "cover", backgroundPosition: "center" }}
-                        />
+                          className="h-8 w-10 rounded-md border border-white/30 bg-white/10 shadow-lg overflow-hidden"
+                        >
+                          <img
+                            src={getImageSrc(t.id, img)}
+                            onError={() => onImageError(img)}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                        </div>
                       ))}
                     </div>
                   </div>

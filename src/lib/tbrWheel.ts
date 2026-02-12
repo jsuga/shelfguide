@@ -8,7 +8,6 @@ export type TbrBook = {
   isbn?: string | null;
   isbn13?: string | null;
   page_count?: number | null;
-  rating?: number | null;
 };
 
 export const TBR_WHEEL_GENRES = [
@@ -21,22 +20,13 @@ export const TBR_WHEEL_GENRES = [
 
 export type TbrWheelGenre = (typeof TBR_WHEEL_GENRES)[number];
 export type TbrFirstInSeriesFilter = "any" | "first_only" | "not_first";
-export type TbrStatusFilter =
-  | "any"
-  | "tbr"
-  | "reading"
-  | "finished"
-  | "want_to_read"
-  | "paused";
 export type TbrOwnershipMode = "library" | "not_owned";
 
 export type TbrFilters = {
   genres: ("Any" | TbrWheelGenre)[];
   firstInSeries: TbrFirstInSeriesFilter;
-  status: TbrStatusFilter;
   ownership: TbrOwnershipMode;
   length: "Any" | "<250" | "250-400" | "400+";
-  rating: "Any" | ">=4";
 };
 
 const normalize = (value: string) => value.trim().toLowerCase();
@@ -65,23 +55,12 @@ export const applyTbrFilters = (books: TbrBook[], filters: TbrFilters) => {
       if (filters.firstInSeries === "not_first" && isFirst) return false;
     }
 
-    if (filters.status !== "any") {
-      const status = normalize(book.status || "");
-      if (status !== normalize(filters.status)) return false;
-    }
-
     if (filters.length !== "Any") {
       const pages = book.page_count ?? null;
       if (!pages) return false;
       if (filters.length === "<250" && pages >= 250) return false;
       if (filters.length === "250-400" && (pages < 250 || pages > 400)) return false;
       if (filters.length === "400+" && pages < 400) return false;
-    }
-
-    if (filters.rating !== "Any") {
-      const rating = book.rating ?? null;
-      if (!rating) return false;
-      if (filters.rating === ">=4" && rating < 4) return false;
     }
 
     return true;

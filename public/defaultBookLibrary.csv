@@ -1,0 +1,3 @@
+title,author,genre,series_name,is_first_in_series,status
+Example Book One,Jane Example,Fantasy,Example Saga,true,tbr
+Example Book Two,John Sample,History,,false,finished

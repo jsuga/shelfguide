@@ -41,10 +41,8 @@ describe("TBR Wheel filters", () => {
     const result = applyTbrFilters(books, {
       genres: ["Fantasy", "History"],
       firstInSeries: "any",
-      status: "any",
       ownership: "library",
       length: "Any",
-      rating: "Any",
     });
     expect(result).toHaveLength(2);
   });
@@ -53,48 +51,19 @@ describe("TBR Wheel filters", () => {
     const result = applyTbrFilters(books, {
       genres: ["Any"],
       firstInSeries: "any",
-      status: "any",
       ownership: "library",
       length: "<250",
-      rating: "Any",
     });
     expect(result).toHaveLength(1);
     expect(result[0]?.title).toBe("A");
-  });
-
-  it("filters by rating threshold", () => {
-    const result = applyTbrFilters(books, {
-      genres: ["Any"],
-      firstInSeries: "any",
-      status: "any",
-      ownership: "library",
-      length: "Any",
-      rating: ">=4",
-    });
-    expect(result).toHaveLength(2);
   });
 
   it("filters by first in series", () => {
     const result = applyTbrFilters(books, {
       genres: ["Any"],
       firstInSeries: "first_only",
-      status: "any",
       ownership: "library",
       length: "Any",
-      rating: "Any",
-    });
-    expect(result).toHaveLength(1);
-    expect(result[0]?.title).toBe("A");
-  });
-
-  it("filters by status", () => {
-    const result = applyTbrFilters(books, {
-      genres: ["Any"],
-      firstInSeries: "any",
-      status: "tbr",
-      ownership: "library",
-      length: "Any",
-      rating: "Any",
     });
     expect(result).toHaveLength(1);
     expect(result[0]?.title).toBe("A");
