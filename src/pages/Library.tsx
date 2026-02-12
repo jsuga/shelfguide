@@ -714,17 +714,17 @@ const Library = () => {
     <main className="container mx-auto px-4 pt-24 pb-16">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <div className="flex items-center gap-3">
-            <h1 className="font-display text-4xl font-bold">My Library</h1>
+          <h1 className="font-display text-4xl font-bold">My Library</h1>
+          <p className="text-muted-foreground mt-2 font-body">
+            Your personal book collection
+          </p>
+          <div className="mt-3">
             <Button variant="outline" size="sm" asChild>
               <a href="/defaultBookLibrary.csv" download>
                 Download CSV template
               </a>
             </Button>
           </div>
-          <p className="text-muted-foreground mt-2 font-body">
-            Your personal book collection
-          </p>
         </div>
         <div className="flex flex-col items-end gap-2">
           <input

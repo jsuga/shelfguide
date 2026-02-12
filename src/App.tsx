@@ -11,6 +11,8 @@ import Library from "./pages/Library";
 import Copilot from "./pages/Copilot";
 import Preferences from "./pages/Preferences";
 import TbrWheel from "./pages/TbrWheel";
+import Community from "./pages/Community";
+import PublicProfile from "./pages/PublicProfile";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -32,6 +34,8 @@ const App = () => (
                 <Route path="/copilot" element={<Copilot />} />
                 <Route path="/tbr-wheel" element={<TbrWheel />} />
                 <Route path="/preferences" element={<Preferences />} />
+                <Route path="/community" element={<Community />} />
+                <Route path="/u/:username" element={<PublicProfile />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
               </Routes>

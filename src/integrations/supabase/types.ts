@@ -34,6 +34,7 @@ export type Database = {
           page_count: number | null
           thumbnail: string | null
           source: string | null
+          dedupe_key: string | null
         }
         Insert: {
           id?: string
@@ -54,6 +55,7 @@ export type Database = {
           page_count?: number | null
           thumbnail?: string | null
           source?: string | null
+          dedupe_key?: string | null
         }
         Update: {
           id?: string
@@ -74,6 +76,30 @@ export type Database = {
           page_count?: number | null
           thumbnail?: string | null
           source?: string | null
+          dedupe_key?: string | null
+        }
+      }
+      profiles: {
+        Row: {
+          user_id: string
+          username: string
+          display_name: string | null
+          is_public: boolean
+          created_at: string | null
+        }
+        Insert: {
+          user_id: string
+          username: string
+          display_name?: string | null
+          is_public?: boolean
+          created_at?: string | null
+        }
+        Update: {
+          user_id?: string
+          username?: string
+          display_name?: string | null
+          is_public?: boolean
+          created_at?: string | null
         }
       }
       copilot_preferences: {

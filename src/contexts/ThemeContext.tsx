@@ -2,6 +2,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useRef } from "react";
 import type { GenreTheme } from "@/contexts/theme-types";
 import { supabase } from "@/integrations/supabase/client";
+import { ensureProfileForUser } from "@/lib/profiles";
 
 const STORAGE_KEY = "shelfguide-theme";
 const LEGACY_STORAGE_KEY = "reading-copilot-theme";
@@ -46,6 +47,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       const user = data.session?.user ?? null;
       setUserId(user?.id ?? null);
       if (user?.id) {
+        try {
+          await ensureProfileForUser(user);
+        } catch {
+          // profiles table may not exist yet in local/dev before migration
+        }
         await loadTheme(user.id);
       }
       allowPersistRef.current = true;
@@ -56,6 +62,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       const user = session?.user ?? null;
       setUserId(user?.id ?? null);
       if (user?.id) {
+        void ensureProfileForUser(user).catch(() => {
+          // profiles table may not exist yet in local/dev before migration
+        });
         void loadTheme(user.id);
         return;
       }

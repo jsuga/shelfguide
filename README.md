@@ -179,6 +179,44 @@ Production checklist:
 - Verify template branding after each Supabase environment promotion.
 - Send a test confirmation email and confirm the subject/body show `ShelfGuide` (not repo/project slug names).
 
+## Public Profiles + Public Libraries
+
+Users can opt in to a public profile and be discovered in Community search.
+
+### Data model
+
+- Table: `public.profiles`
+- Columns:
+- `user_id` (PK, references `auth.users`)
+- `username` (unique, required)
+- `display_name` (optional)
+- `is_public` (default `false`)
+- `created_at`
+
+### Privacy model
+
+- Private profiles (`is_public=false`) are not searchable.
+- Public search only queries `profiles` where `is_public=true`.
+- Public library reads are allowed only when the owner profile is public.
+- Owners can always view their own profile/library even when private.
+
+### Username setup and editing
+
+- On sign-up/login bootstrap, app ensures a profile row exists.
+- If no profile row exists yet, one is created with a generated username.
+- Users can edit username/display name and privacy toggle in **Settings -> Profile**.
+- Username rules: `3-24` chars, lowercase letters/numbers/underscore.
+
+### Routes
+
+- Community search: `/community`
+- Public profile/library: `/u/:username`
+
+### Search anti-abuse guardrails
+
+- Client-side debounce is applied before running profile search.
+- Query is restricted to public profiles only and limited to 20 results per request.
+
 ## ShelfGuide Copilot (Edge Function)
 
 This MVP uses a Supabase Edge Function to call Claude Sonnet and fetch book metadata from Google Books, with Open Library as a fallback.
@@ -290,6 +328,49 @@ Cloud import writes are upsert-based and deduped by `books.dedupe_key`:
 - Otherwise: dedupe by `user_id + normalized(title|author)`
 
 If cloud write fails, import data is queued locally and retried in the background; you can also trigger retry manually from **Preferences -> Sync Status**.
+
+## Session 6.1 Stabilization (Sync + Dedupe + Auth)
+
+### Queue safety and retries
+
+- Queue items are now user-scoped (`user_id` stored per queued item).
+- `flushAllPendingSync` only flushes items for the currently authenticated user.
+- If no authenticated session exists, queued items remain pending (no flush).
+- Legacy queue items without `user_id` are treated as `needs_attention` (never auto-attributed to another user).
+- Queue retries are capped at 5 attempts; then items move to `needs_attention` to avoid infinite retry loops.
+
+### Needs-attention handling
+
+- Global sync banner surfaces `needs_attention` counts and details:
+  - operation type
+  - source
+  - last error
+  - attempt count
+- Banner includes **Dismiss issues** to safely clear `needs_attention` items so sync UI does not remain stuck.
+
+### Shared dedupe key behavior
+
+- Dedupe normalization is centralized in `src/lib/bookDedupe.ts`.
+- Key format:
+  - `isbn13:<isbn13>` when ISBN13 is present
+  - `title_author:<normalized_title>|<normalized_author>` otherwise
+- Used across manual CSV import, Goodreads import merge, demo seed checks, and add-to-library flows.
+
+### Database dedupe enforcement
+
+- Migration: `supabase/migrations/20260212183000_books_dedupe_key_upsert.sql`
+- Adds generated `books.dedupe_key` and unique index `(user_id, dedupe_key)`.
+- Cloud writes use upsert conflict target `user_id,dedupe_key`.
+
+### Diagnostics (dev/flagged)
+
+- Preferences page includes a **Diagnostics** block in dev mode, or when:
+  - `VITE_ENABLE_SYNC_DIAGNOSTICS=true`
+- Diagnostics checks:
+  - `dedupe_key` column is selectable
+  - upsert conflict path works
+  - RLS is likely active for authenticated reads
+  - last check timestamp and notes
 
 ### Default physical-library CSV template
 

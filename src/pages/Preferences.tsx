@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Palette } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useTheme } from "@/contexts/ThemeContext";
 import type { GenreTheme } from "@/contexts/theme-types";
 import { themeOptions } from "@/contexts/theme-types";
@@ -10,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import {
   flushAllPendingSync,
@@ -17,6 +19,11 @@ import {
   getPendingSyncCounts,
   SYNC_EVENT,
 } from "@/lib/cloudSync";
+import {
+  ensureProfileForUser,
+  isValidUsername,
+  normalizeUsername,
+} from "@/lib/profiles";
 
 const themeCards: {
   id: GenreTheme;
@@ -136,6 +143,8 @@ const Preferences = () => {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [syncUserId, setSyncUserId] = useState<string | null>(null);
   const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [isPublicProfile, setIsPublicProfile] = useState(false);
   const [saving, setSaving] = useState(false);
   const [preferredGenres, setPreferredGenres] = useState("");
   const [avoidedGenres, setAvoidedGenres] = useState("");
@@ -254,8 +263,22 @@ const Preferences = () => {
       const user = data.session?.user ?? null;
       setUserEmail(user?.email ?? null);
       setSyncUserId(user?.id ?? null);
-      const storedUsername = (user?.user_metadata as { username?: string })?.username || "";
-      setUsername(storedUsername);
+      if (user) {
+        try {
+          const profile = await ensureProfileForUser(user);
+          setUsername(profile.username);
+          setDisplayName(profile.display_name || "");
+          setIsPublicProfile(profile.is_public);
+        } catch {
+          setUsername("");
+          setDisplayName("");
+          setIsPublicProfile(false);
+        }
+      } else {
+        setUsername("");
+        setDisplayName("");
+        setIsPublicProfile(false);
+      }
       if (user?.id) {
         const { data: prefs } = await supabase
           .from("copilot_preferences")
@@ -280,8 +303,23 @@ const Preferences = () => {
       const user = session?.user ?? null;
       setUserEmail(user?.email ?? null);
       setSyncUserId(user?.id ?? null);
-      const storedUsername = (user?.user_metadata as { username?: string })?.username || "";
-      setUsername(storedUsername);
+      if (user) {
+        void ensureProfileForUser(user)
+          .then((profile) => {
+            setUsername(profile.username);
+            setDisplayName(profile.display_name || "");
+            setIsPublicProfile(profile.is_public);
+          })
+          .catch(() => {
+            setUsername("");
+            setDisplayName("");
+            setIsPublicProfile(false);
+          });
+      } else {
+        setUsername("");
+        setDisplayName("");
+        setIsPublicProfile(false);
+      }
       if (user?.id) {
         (async () => {
           const { data: prefs } = await supabase
@@ -321,20 +359,49 @@ const Preferences = () => {
   }, [refreshPendingSync]);
 
   const handleSave = async () => {
-    if (!username.trim()) {
-      toast.error("Username cannot be empty.");
+    if (!userEmail) {
+      toast.error("Sign in to save profile settings.");
       return;
     }
+    const normalized = normalizeUsername(username);
+    if (!isValidUsername(normalized)) {
+      toast.error("Username must be 3-24 chars (letters, numbers, underscores).");
+      return;
+    }
+    setUsername(normalized);
     setSaving(true);
-    const { error } = await supabase.auth.updateUser({
-      data: { username: username.trim() },
+    const userId = await getAuthenticatedUserId();
+    if (!userId) {
+      setSaving(false);
+      toast.error("Sign in to save profile settings.");
+      return;
+    }
+    const { error } = await supabase
+      .from("profiles")
+      .upsert({
+        user_id: userId,
+        username: normalized,
+        display_name: displayName.trim() || null,
+        is_public: isPublicProfile,
+      });
+    if (error) {
+      setSaving(false);
+      if (error.code === "23505") {
+        toast.error("That username is already taken.");
+      } else {
+        toast.error(error.message);
+      }
+      return;
+    }
+    const { error: authError } = await supabase.auth.updateUser({
+      data: { username: normalized },
     });
     setSaving(false);
-    if (error) {
-      toast.error(error.message);
+    if (authError) {
+      toast.error(authError.message);
       return;
     }
-    toast.success("Username updated.");
+    toast.success("Profile updated.");
   };
 
   const handleSavePreferences = async () => {
@@ -372,7 +439,7 @@ const Preferences = () => {
   return (
     <main className="container mx-auto px-4 pt-24 pb-16">
       <div className="mb-8">
-        <h1 className="font-display text-4xl font-bold">Preferences</h1>
+        <h1 className="font-display text-4xl font-bold">Settings</h1>
         <p className="text-muted-foreground mt-2 font-body">
           Customize your reading experience
         </p>
@@ -388,6 +455,14 @@ const Preferences = () => {
             {syncingNow ? "Retrying..." : "Retry sync"}
           </Button>
         </section>
+        {userEmail && !username.trim() && (
+          <section className="rounded-xl border border-border/60 bg-card/70 p-6 lg:col-span-2">
+            <h2 className="font-display text-2xl font-bold mb-2">Choose a Username</h2>
+            <p className="text-sm text-muted-foreground font-body">
+              Pick a username to complete your profile setup and enable a public link.
+            </p>
+          </section>
+        )}
         {showDiagnostics && (
           <section className="rounded-xl border border-border/60 bg-card/70 p-6 lg:col-span-2">
             <h2 className="font-display text-2xl font-bold mb-2">Diagnostics</h2>
@@ -427,6 +502,35 @@ const Preferences = () => {
                   placeholder="chapterSeeker"
                 />
               </div>
+              <div className="grid gap-2">
+                <Label htmlFor="display-name">Display name (optional)</Label>
+                <Input
+                  id="display-name"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  placeholder="Chapter Seeker"
+                />
+              </div>
+              <div className="flex items-center justify-between rounded-lg border border-border/60 bg-background/60 p-3">
+                <div>
+                  <div className="text-sm font-medium">Profile Privacy</div>
+                  <p className="text-xs text-muted-foreground">
+                    Public profile: allow others to find your profile and view your library.
+                  </p>
+                </div>
+                <Switch checked={isPublicProfile} onCheckedChange={setIsPublicProfile} />
+              </div>
+              {isPublicProfile && isValidUsername(normalizeUsername(username)) && (
+                <div className="text-xs text-muted-foreground">
+                  Public link:{" "}
+                  <Link
+                    className="underline"
+                    to={`/u/${normalizeUsername(username)}`}
+                  >
+                    /u/{normalizeUsername(username)}
+                  </Link>
+                </div>
+              )}
               <div className="flex items-center justify-end">
                 <Button onClick={handleSave} disabled={saving}>
                   {saving ? "Saving..." : "Save changes"}
