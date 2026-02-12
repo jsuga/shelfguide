@@ -121,6 +121,64 @@ create policy "Users can delete their own books"
 
 Local storage is still used as a fallback when the user is not signed in.
 
+### Google OAuth setup (Supabase + Google Cloud)
+
+If Google OAuth is not fully configured, the app keeps Google sign-in disabled and shows a "coming soon" hint in the auth dialog. Email/password remains the primary auth path.
+
+Client flag:
+
+```sh
+VITE_ENABLE_GOOGLE_OAUTH=true
+```
+
+Supabase Dashboard -> Authentication -> URL Configuration:
+
+- Site URL: `https://shelfguide.lovable.app`
+- Additional Redirect URLs:
+- `https://shelfguide.lovable.app`
+- `http://localhost:8081`
+- `http://127.0.0.1:8081`
+- `http://localhost:4173`
+- `http://127.0.0.1:4173`
+- `http://localhost:4175`
+- `http://127.0.0.1:4175`
+
+Supabase Dashboard -> Authentication -> Providers -> Google:
+
+- Enable Google provider.
+- Set Google Client ID and Client Secret from Google Cloud Console.
+
+Google Cloud Console -> APIs & Services -> Credentials -> OAuth 2.0 Client:
+
+- Authorized JavaScript origins:
+- `https://shelfguide.lovable.app`
+- `http://localhost:8081`
+- `http://127.0.0.1:8081`
+- `http://localhost:4173`
+- `http://127.0.0.1:4173`
+- `http://localhost:4175`
+- `http://127.0.0.1:4175`
+- Authorized redirect URIs:
+- `https://<YOUR_SUPABASE_PROJECT_REF>.supabase.co/auth/v1/callback`
+
+The app currently sends `redirectTo: window.location.origin` during OAuth start, so each local/dev origin you use should exist in the allowed origin list.
+
+### Supabase Auth email branding (ShelfGuide)
+
+Update these in Supabase Dashboard -> Authentication:
+
+1. Email Templates:
+- Replace product naming with `ShelfGuide` in confirmation/reset/invite/magic-link templates.
+- Update subject line and preview text to use ShelfGuide wording.
+2. SMTP / sender settings:
+- Sender name: `ShelfGuide`
+- Sender email/domain: your production sender identity.
+
+Production checklist:
+
+- Verify template branding after each Supabase environment promotion.
+- Send a test confirmation email and confirm the subject/body show `ShelfGuide` (not repo/project slug names).
+
 ## ShelfGuide Copilot (Edge Function)
 
 This MVP uses a Supabase Edge Function to call Claude Sonnet and fetch book metadata from Google Books, with Open Library as a fallback.
@@ -225,6 +283,13 @@ Go to **My Library** and use the **Goodreads Import** card to upload the CSV. Th
 - `read` -> `finished`
 
 Duplicates are merged by ISBN/ISBN13 (preferred) or Title+Author.
+
+Cloud import writes are upsert-based and deduped by `books.dedupe_key`:
+
+- If ISBN13 exists: dedupe by `user_id + isbn13`
+- Otherwise: dedupe by `user_id + normalized(title|author)`
+
+If cloud write fails, import data is queued locally and retried in the background; you can also trigger retry manually from **Preferences -> Sync Status**.
 
 ### Default physical-library CSV template
 

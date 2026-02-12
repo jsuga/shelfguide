@@ -16,6 +16,13 @@ import {
 } from "@/components/ui/drawer";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  enqueueLibrarySync,
+  flushAllPendingSync,
+  getAuthenticatedUserId,
+  retryAsync,
+  upsertBooksToCloud,
+} from "@/lib/cloudSync";
 
 type LibraryBook = {
   id?: string;
@@ -73,6 +80,7 @@ const Library = () => {
   const [confirmClearLogs, setConfirmClearLogs] = useState(false);
   const [selectedFailures, setSelectedFailures] = useState<string[] | null>(null);
   const [seedingDemo, setSeedingDemo] = useState(false);
+  const [cloudNotice, setCloudNotice] = useState<string | null>(null);
 
   const getLocalBooks = () => {
     const stored = localStorage.getItem("reading-copilot-library");
@@ -102,7 +110,7 @@ const Library = () => {
       .limit(6);
     setLoadingLogs(false);
     if (error) {
-      toast.error("Could not load import history.");
+      setCloudNotice("Cloud sync is unavailable. Using local cache until connection recovers.");
       return;
     }
     setImportLogs(data || []);
@@ -137,18 +145,24 @@ const Library = () => {
       return;
     }
     setLoadingBooks(true);
-    const { data, error } = await supabase
-      .from("books")
-      .select("*")
-      .eq("user_id", userIdValue)
-      .order("created_at", { ascending: false });
+    const { data, error } = await retryAsync(
+      () =>
+        supabase
+          .from("books")
+          .select("*")
+          .eq("user_id", userIdValue)
+          .order("created_at", { ascending: false }),
+      1,
+      350
+    );
     setLoadingBooks(false);
 
     if (error) {
-      toast.error("Could not load your cloud library. Showing local data.");
+      setCloudNotice("Cloud sync is unavailable. Showing local data.");
       setBooks(getLocalBooks());
       return;
     }
+    setCloudNotice(null);
 
     const cloudBooks = (data || []) as LibraryBook[];
     setBooks(cloudBooks);
@@ -173,13 +187,15 @@ const Library = () => {
 
   useEffect(() => {
     const init = async () => {
+      const userIdValue = await getAuthenticatedUserId();
       const { data } = await supabase.auth.getSession();
       const user = data.session?.user ?? null;
       setUserId(user?.id ?? null);
       const username = (user?.user_metadata as { username?: string })?.username;
       setUserLabel(username || user?.email || null);
-      await loadBooks(user?.id ?? null);
-      await loadImportLogs(user?.id ?? null);
+      await loadBooks(userIdValue);
+      await loadImportLogs(userIdValue);
+      await flushAllPendingSync();
     };
 
     void init();
@@ -191,6 +207,9 @@ const Library = () => {
       setUserLabel(username || user?.email || null);
       void loadBooks(user?.id ?? null);
       void loadImportLogs(user?.id ?? null);
+      if (user?.id) {
+        void flushAllPendingSync();
+      }
     });
 
     return () => {
@@ -369,9 +388,7 @@ const Library = () => {
       setSeedingDemo(false);
       return;
     }
-    const { error } = await supabase
-      .from("books")
-      .insert(toInsert.map((book) => ({ ...book, user_id: userId })));
+    const { error } = await upsertBooksToCloud(userId, toInsert);
     setSeedingDemo(false);
     if (error) {
       toast.error("Could not seed demo library.");
@@ -480,18 +497,29 @@ const Library = () => {
     }
 
     if (userId) {
-      const { data: userData } = await supabase.auth.getUser();
-      const userId = userData.user?.id;
-      const { error } = await supabase
-        .from("books")
-        .insert(booksFromCsv.map((book) => ({ ...book, user_id: userId })));
-      if (error) {
-        toast.error("Upload failed. Saved locally instead.");
+      const userIdValue = await getAuthenticatedUserId();
+      if (!userIdValue) {
         const nextBooks = [...books, ...booksFromCsv];
         persistBooks(nextBooks);
+        enqueueLibrarySync(booksFromCsv, "manual_csv_upload", file.name);
+        setCloudNotice("Not signed in. Saved locally and queued for cloud sync.");
         return;
       }
-      await loadBooks(userId ?? null);
+
+      const { error } = await retryAsync(
+        () => upsertBooksToCloud(userIdValue, booksFromCsv),
+        1,
+        350
+      );
+      if (error) {
+        toast.error(`Upload failed: ${error.message}. Saved locally and queued for retry.`);
+        const nextBooks = [...books, ...booksFromCsv];
+        persistBooks(nextBooks);
+        enqueueLibrarySync(booksFromCsv, "manual_csv_upload", file.name);
+        setCloudNotice("Cloud sync pending. We will retry automatically.");
+        return;
+      }
+      await loadBooks(userIdValue);
       toast.success(`Added ${booksFromCsv.length} book${booksFromCsv.length === 1 ? "" : "s"} from CSV.`);
       return;
     }
@@ -648,44 +676,16 @@ const Library = () => {
     });
 
     if (userId) {
-      const inserts = upserts.filter((book) => !book.id);
-      const updates = upserts.filter((book) => book.id);
-      if (inserts.length > 0) {
-        const { error } = await supabase
-          .from("books")
-          .insert(inserts.map((book) => ({ ...book, user_id: userId })));
-        if (error) {
-          failures.push("Insert failed for some rows.");
-        }
-      }
-      for (const book of updates) {
-        if (!book.id) continue;
-        const { error } = await supabase
-          .from("books")
-          .update({
-            title: book.title,
-            author: book.author,
-            genre: book.genre,
-            series_name: book.series_name,
-            is_first_in_series: book.is_first_in_series,
-            status: book.status,
-            isbn: book.isbn,
-            isbn13: book.isbn13,
-            rating: book.rating,
-            date_read: book.date_read,
-            shelf: book.shelf,
-            description: book.description,
-            page_count: book.page_count,
-            thumbnail: book.thumbnail,
-            source: book.source,
-          })
-          .eq("id", book.id);
-        if (error) failures.push(`Update failed for ${book.title}.`);
+      const { error } = await retryAsync(() => upsertBooksToCloud(userId, upserts), 1, 350);
+      if (error) {
+        failures.push(error.message);
+        enqueueLibrarySync(upserts, "goodreads_csv", file.name);
+        setCloudNotice("Goodreads import queued for background sync.");
       }
       await loadBooks(userId);
       await supabase.from("import_logs").insert({
         user_id: userId,
-        source: "goodreads_csv",
+        source: `goodreads_csv:${file.name}`,
         added_count: added,
         updated_count: updated,
         failed_count: failures.length,
@@ -865,6 +865,11 @@ const Library = () => {
           </Button>
         </div>
       </div>
+      {cloudNotice && (
+        <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground">
+          {cloudNotice}
+        </div>
+      )}
 
       <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr] mb-10">
         <Card className="border-border/60 bg-card/70">

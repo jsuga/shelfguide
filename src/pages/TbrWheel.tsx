@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { flushAllPendingSync, getAuthenticatedUserId, retryAsync } from "@/lib/cloudSync";
 import {
   applyTbrFilters,
   dedupeCandidatesAgainstOwned,
@@ -146,30 +147,33 @@ const TbrWheel = () => {
   const [spinning, setSpinning] = useState(false);
   const [winner, setWinner] = useState<LibraryBook | null>(null);
   const [spinDuration, setSpinDuration] = useState(2800);
+  const [cloudNotice, setCloudNotice] = useState<string | null>(null);
 
   const loadBooks = async (userIdValue: string | null) => {
     if (!userIdValue) {
       setBooks(getLocalBooks());
       return;
     }
-    const { data, error } = await supabase
-      .from("books")
-      .select("*")
-      .eq("user_id", userIdValue);
+    const { data, error } = await retryAsync(
+      () => supabase.from("books").select("*").eq("user_id", userIdValue),
+      1,
+      350
+    );
     if (error) {
-      toast.error("Could not load your library. Showing local data.");
+      setCloudNotice("Cloud library unavailable. Using local books.");
       setBooks(getLocalBooks());
       return;
     }
+    setCloudNotice(null);
     setBooks((data || []) as LibraryBook[]);
   };
 
   useEffect(() => {
     const init = async () => {
-      const { data } = await supabase.auth.getSession();
-      const user = data.session?.user ?? null;
-      setUserId(user?.id ?? null);
-      await loadBooks(user?.id ?? null);
+      const userIdValue = await getAuthenticatedUserId();
+      setUserId(userIdValue);
+      await loadBooks(userIdValue);
+      await flushAllPendingSync();
     };
     void init();
 
@@ -177,6 +181,9 @@ const TbrWheel = () => {
       const user = session?.user ?? null;
       setUserId(user?.id ?? null);
       void loadBooks(user?.id ?? null);
+      if (user?.id) {
+        void flushAllPendingSync();
+      }
     });
 
     return () => {
@@ -405,6 +412,11 @@ const TbrWheel = () => {
           Reduce decision fatigue and spin your next read.
         </p>
       </div>
+      {cloudNotice && (
+        <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground">
+          {cloudNotice}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
         <section className="rounded-xl border border-border/60 bg-card/70 p-6">

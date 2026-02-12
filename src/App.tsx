@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import Navbar from "@/components/Navbar";
+import SyncBanner from "@/components/SyncBanner";
 import Index from "./pages/Index";
 import Library from "./pages/Library";
 import Copilot from "./pages/Copilot";
@@ -22,6 +23,7 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <Navbar />
+          <SyncBanner />
           <div className="theme-page min-h-screen flex flex-col">
             <div className="flex-1">
               <Routes>

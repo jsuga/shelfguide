@@ -11,6 +11,12 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
+import {
+  flushAllPendingSync,
+  getAuthenticatedUserId,
+  getPendingSyncCounts,
+  SYNC_EVENT,
+} from "@/lib/cloudSync";
 
 const themeCards: {
   id: GenreTheme;
@@ -134,6 +140,8 @@ const Preferences = () => {
   const [preferredPace, setPreferredPace] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [savingPrefs, setSavingPrefs] = useState(false);
+  const [pendingSync, setPendingSync] = useState(getPendingSyncCounts());
+  const [syncingNow, setSyncingNow] = useState(false);
 
   const getThemeFallback = (_themeId: GenreTheme) => "/images/themes/shelf1.jpg";
   const getImageSrc = (themeId: GenreTheme, src: string) =>
@@ -141,6 +149,22 @@ const Preferences = () => {
 
   const onImageError = (src: string) => {
     setFailedImages((prev) => (prev[src] ? prev : { ...prev, [src]: true }));
+  };
+
+  const refreshPendingSync = () => {
+    setPendingSync(getPendingSyncCounts());
+  };
+
+  const handleRetrySync = async () => {
+    setSyncingNow(true);
+    const result = await flushAllPendingSync();
+    setSyncingNow(false);
+    refreshPendingSync();
+    if (result.failed > 0) {
+      toast.error(`Sync retry failed: ${result.errorMessages[0] || "Unknown error"}`);
+      return;
+    }
+    toast.success("Sync retry completed.");
   };
 
   useEffect(() => {
@@ -201,6 +225,14 @@ const Preferences = () => {
     };
   }, [setTheme]);
 
+  useEffect(() => {
+    const onSyncUpdate = () => refreshPendingSync();
+    window.addEventListener(SYNC_EVENT, onSyncUpdate);
+    return () => {
+      window.removeEventListener(SYNC_EVENT, onSyncUpdate);
+    };
+  }, []);
+
   const handleSave = async () => {
     if (!username.trim()) {
       toast.error("Username cannot be empty.");
@@ -224,9 +256,8 @@ const Preferences = () => {
       return;
     }
     setSavingPrefs(true);
-    const { data } = await supabase.auth.getSession();
-    const user = data.session?.user ?? null;
-    if (!user?.id) {
+    const userId = await getAuthenticatedUserId();
+    if (!userId) {
       toast.error("Sign in to save preferences.");
       setSavingPrefs(false);
       return;
@@ -234,7 +265,7 @@ const Preferences = () => {
     const { error } = await supabase
       .from("copilot_preferences")
       .upsert({
-        user_id: user.id,
+        user_id: userId,
         preferred_genres: parseList(preferredGenres),
         avoided_genres: parseList(avoidedGenres),
         preferred_formats: parseList(preferredFormats),
@@ -261,6 +292,16 @@ const Preferences = () => {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
+        <section className="rounded-xl border border-border/60 bg-card/70 p-6 lg:col-span-2">
+          <h2 className="font-display text-2xl font-bold mb-2">Sync Status</h2>
+          <p className="text-sm text-muted-foreground font-body mb-4">
+            Pending library sync: {pendingSync.library} | pending feedback sync: {pendingSync.feedback}
+          </p>
+          <Button variant="outline" onClick={handleRetrySync} disabled={syncingNow}>
+            {syncingNow ? "Retrying..." : "Retry sync"}
+          </Button>
+        </section>
+
         <section className="rounded-xl border border-border/60 bg-card/70 p-6">
           <h2 className="font-display text-2xl font-bold mb-2">Profile</h2>
           <p className="text-sm text-muted-foreground font-body mb-6">

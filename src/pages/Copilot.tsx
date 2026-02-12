@@ -22,6 +22,14 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  enqueueFeedbackSync,
+  enqueueLibrarySync,
+  flushAllPendingSync,
+  getAuthenticatedUserId,
+  retryAsync,
+  upsertBooksToCloud,
+} from "@/lib/cloudSync";
 
 type LibraryBook = {
   id?: string;
@@ -305,6 +313,7 @@ const Copilot = () => {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [selectedHistory, setSelectedHistory] = useState<HistoryEntry | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [cloudNotice, setCloudNotice] = useState<string | null>(null);
 
   const promptTags = useMemo(() => derivePromptTags(prompt, selectedTags), [prompt, selectedTags]);
   const profile = useMemo(() => buildProfile(books), [books]);
@@ -319,18 +328,24 @@ const Copilot = () => {
       return;
     }
     setLoadingLibrary(true);
-    const { data, error } = await supabase
-      .from("books")
-      .select("*")
-      .eq("user_id", userIdValue)
-      .order("created_at", { ascending: false });
+    const { data, error } = await retryAsync(
+      () =>
+        supabase
+          .from("books")
+          .select("*")
+          .eq("user_id", userIdValue)
+          .order("created_at", { ascending: false }),
+      1,
+      350
+    );
     setLoadingLibrary(false);
 
     if (error) {
-      toast.error("Could not load your cloud library. Showing local data.");
+      setCloudNotice("Cloud sync unavailable. Using local data.");
       setBooks(getLocalBooks());
       return;
     }
+    setCloudNotice(null);
 
     const cloudBooks = (data || []) as LibraryBook[];
     setBooks(cloudBooks);
@@ -358,14 +373,19 @@ const Copilot = () => {
       setFeedbackEntries(loadLocalFeedback());
       return;
     }
-    const { data, error } = await supabase
-      .from("copilot_feedback")
-      .select("*")
-      .eq("user_id", userIdValue)
-      .order("created_at", { ascending: false })
-      .limit(50);
+    const { data, error } = await retryAsync(
+      () =>
+        supabase
+          .from("copilot_feedback")
+          .select("*")
+          .eq("user_id", userIdValue)
+          .order("created_at", { ascending: false })
+          .limit(50),
+      1,
+      350
+    );
     if (error) {
-      toast.error("Could not load feedback. Using local cache.");
+      setCloudNotice("Feedback sync paused. Using local cache.");
       setFeedbackEntries(loadLocalFeedback());
       return;
     }
@@ -378,15 +398,20 @@ const Copilot = () => {
       return;
     }
     setLoadingHistory(true);
-    const { data, error } = await supabase
-      .from("copilot_recommendations")
-      .select("id,title,author,genre,source,reasons,summary,tags,why_new,created_at")
-      .eq("user_id", userIdValue)
-      .order("created_at", { ascending: false })
-      .limit(8);
+    const { data, error } = await retryAsync(
+      () =>
+        supabase
+          .from("copilot_recommendations")
+          .select("id,title,author,genre,source,reasons,summary,tags,why_new,created_at")
+          .eq("user_id", userIdValue)
+          .order("created_at", { ascending: false })
+          .limit(8),
+      1,
+      350
+    );
     setLoadingHistory(false);
     if (error) {
-      toast.error("Could not load recommendation history.");
+      setCloudNotice("Recommendation history unavailable right now.");
       return;
     }
     setHistoryEntries((data || []) as HistoryEntry[]);
@@ -417,12 +442,12 @@ const Copilot = () => {
 
   useEffect(() => {
     const init = async () => {
-      const { data } = await supabase.auth.getSession();
-      const user = data.session?.user ?? null;
-      setUserId(user?.id ?? null);
-      await loadBooks(user?.id ?? null);
-      await loadFeedback(user?.id ?? null);
-      await loadHistory(user?.id ?? null);
+      const userIdValue = await getAuthenticatedUserId();
+      setUserId(userIdValue);
+      await loadBooks(userIdValue);
+      await loadFeedback(userIdValue);
+      await loadHistory(userIdValue);
+      await flushAllPendingSync();
     };
     void init();
 
@@ -432,6 +457,9 @@ const Copilot = () => {
       void loadBooks(user?.id ?? null);
       void loadFeedback(user?.id ?? null);
       void loadHistory(user?.id ?? null);
+      if (user?.id) {
+        void flushAllPendingSync();
+      }
     });
 
     return () => {
@@ -506,10 +534,12 @@ const Copilot = () => {
         .from("copilot_feedback")
         .insert([{ ...entry, user_id: userId }]);
       if (error) {
-        toast.error("Could not save feedback. Stored locally instead.");
+        toast.error(`Could not save feedback: ${error.message}. Queued for retry.`);
         const next = [entry, ...feedbackEntries].slice(0, 50);
         setFeedbackEntries(next);
         saveLocalFeedback(next);
+        enqueueFeedbackSync(entry);
+        setCloudNotice("Feedback queued for cloud sync.");
         return;
       }
       const next = [entry, ...feedbackEntries].slice(0, 50);
@@ -545,19 +575,17 @@ const Copilot = () => {
     };
 
     if (userId) {
-      const { data, error } = await supabase
-        .from("books")
-        .insert([{ ...newBook, user_id: userId }])
-        .select("*")
-        .single();
+      const { error } = await upsertBooksToCloud(userId, [newBook]);
       if (error) {
-        toast.error("Could not add to cloud library. Saved locally instead.");
+        toast.error(`Could not add to cloud library: ${error.message}. Queued for retry.`);
         const nextBooks = [newBook, ...books];
         setBooks(nextBooks);
         setLocalBooks(nextBooks);
+        enqueueLibrarySync([newBook], "copilot_add_to_library");
+        setCloudNotice("Library change queued for cloud sync.");
         return;
       }
-      setBooks([data as LibraryBook, ...books]);
+      await loadBooks(userId);
       toast.success("Added to your cloud library.");
       return;
     }
@@ -612,6 +640,11 @@ const Copilot = () => {
           Personalized recommendations with clear reasoning and human control.
         </p>
       </div>
+      {cloudNotice && (
+        <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground">
+          {cloudNotice}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
         <section className="rounded-xl border border-border/60 bg-card/70 p-6">

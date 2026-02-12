@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { BookOpen, Menu, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -35,7 +35,24 @@ const Navbar = () => {
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authUsername, setAuthUsername] = useState("");
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const { theme, setTheme } = useTheme();
+  const googleOAuthEnabled = import.meta.env.VITE_ENABLE_GOOGLE_OAUTH === "true";
+
+  useEffect(() => {
+    const init = async () => {
+      const { data } = await supabase.auth.getSession();
+      setIsAuthenticated(Boolean(data.session?.user));
+    };
+    void init();
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthenticated(Boolean(session?.user));
+    });
+    return () => {
+      listener.subscription.unsubscribe();
+    };
+  }, []);
 
   const handleAuth = async () => {
     if (!authEmail || !authPassword) {
@@ -76,6 +93,10 @@ const Navbar = () => {
   };
 
   const handleSocialAuth = async (provider: "google" | "apple") => {
+    if (provider === "google" && !googleOAuthEnabled) {
+      toast.message("Google sign-in is coming soon. Use email/password for now.");
+      return;
+    }
     const redirectTo = window.location.origin;
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
@@ -84,6 +105,19 @@ const Navbar = () => {
     if (error) {
       toast.error(error.message);
     }
+  };
+
+  const handleHeaderAuthClick = async () => {
+    if (isAuthenticated) {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      toast.success("Signed out.");
+      return;
+    }
+    setAuthOpen(true);
   };
 
   return (
@@ -127,13 +161,8 @@ const Navbar = () => {
               </SelectContent>
             </Select>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="ml-2"
-            onClick={() => setAuthOpen(true)}
-          >
-            Sign in
+          <Button variant="outline" size="sm" className="ml-2" onClick={() => void handleHeaderAuthClick()}>
+            {isAuthenticated ? "Sign out" : "Sign in"}
           </Button>
         </div>
 
@@ -168,10 +197,10 @@ const Navbar = () => {
                 className="justify-start mt-2"
                 onClick={() => {
                   setOpen(false);
-                  setAuthOpen(true);
+                  void handleHeaderAuthClick();
                 }}
               >
-                Sign in
+                {isAuthenticated ? "Sign out" : "Sign in"}
               </Button>
             </div>
           </SheetContent>
@@ -194,7 +223,12 @@ const Navbar = () => {
 
             <div className="px-8 py-6 grid gap-4">
               <div className="grid gap-2">
-                <Button variant="outline" onClick={() => handleSocialAuth("google")}>
+                <Button
+                  variant="outline"
+                  onClick={() => handleSocialAuth("google")}
+                  disabled={!googleOAuthEnabled}
+                  title={!googleOAuthEnabled ? "Coming soon. Use email/password for now." : undefined}
+                >
                   Continue with Google
                 </Button>
                 <Button variant="outline" onClick={() => handleSocialAuth("apple")}>
