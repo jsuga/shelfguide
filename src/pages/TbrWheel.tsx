@@ -284,6 +284,7 @@ const TbrWheel = () => {
   const applyFilters = async () => {
     const next = {
       ...filters,
+      length: filters.ownership === "library" ? "Any" : filters.length,
       rating: filters.rating === ">=4" ? ">=4" : "Any",
     };
     setAppliedFilters(next);
@@ -511,6 +512,7 @@ const TbrWheel = () => {
                   setFilters((prev) => ({
                     ...prev,
                     ownership: value as TbrOwnershipMode,
+                    length: value === "library" ? "Any" : prev.length,
                   }))
                 }
               >
@@ -529,20 +531,22 @@ const TbrWheel = () => {
               )}
             </div>
 
-            <div className="grid gap-2">
-              <label className="text-sm font-medium">Length</label>
-              <Select value={filters.length} onValueChange={(value) => setFilters((prev) => ({ ...prev, length: value as TbrFilters["length"] }))}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select length" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Any">Any</SelectItem>
-                  <SelectItem value="<250">&lt;250 pages</SelectItem>
-                  <SelectItem value="250-400">250-400 pages</SelectItem>
-                  <SelectItem value="400+">400+ pages</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {filters.ownership !== "library" && (
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">Length</label>
+                <Select value={filters.length} onValueChange={(value) => setFilters((prev) => ({ ...prev, length: value as TbrFilters["length"] }))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select length" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Any">Any</SelectItem>
+                    <SelectItem value="<250">&lt;250 pages</SelectItem>
+                    <SelectItem value="250-400">250-400 pages</SelectItem>
+                    <SelectItem value="400+">400+ pages</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="grid gap-2">
               <label className="text-sm font-medium">Rating threshold</label>
