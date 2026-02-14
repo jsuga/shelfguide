@@ -31,7 +31,7 @@ const buildDefaultUsername = (user: User) => {
 };
 
 export const ensureProfileForUser = async (user: User) => {
-  const { data: existing } = await supabase
+  const { data: existing } = await (supabase as any)
     .from("profiles")
     .select("user_id,username,display_name,is_public,created_at")
     .eq("user_id", user.id)
@@ -46,7 +46,7 @@ export const ensureProfileForUser = async (user: User) => {
     String(user.email || "").split("@")[0] ||
     null) as string | null;
 
-  const { data: inserted, error } = await supabase
+  const { data: inserted, error } = await (supabase as any)
     .from("profiles")
     .insert({
       user_id: user.id,
@@ -62,4 +62,3 @@ export const ensureProfileForUser = async (user: User) => {
   }
   return inserted as ProfileRow;
 };
-

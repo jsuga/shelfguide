@@ -32,12 +32,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const loadTheme = async (id: string) => {
-      const { data } = await supabase
+      const { data } = await (supabase as any)
         .from("copilot_preferences")
         .select("ui_theme")
         .eq("user_id", id)
         .maybeSingle();
-      if (data?.ui_theme) {
+      if (data && data.ui_theme) {
         setTheme(data.ui_theme as GenreTheme);
       }
     };
@@ -79,7 +79,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!allowPersistRef.current || !userId) return;
     const persistTheme = async () => {
-      await supabase
+      await (supabase as any)
         .from("copilot_preferences")
         .upsert(
           {

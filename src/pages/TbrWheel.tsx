@@ -3,7 +3,6 @@ import { Sparkles, RotateCw, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
@@ -16,15 +15,17 @@ import {
 import {
   applyTbrFilters,
   dedupeCandidatesAgainstOwned,
+  getDistinctGenres,
   pickWinnerIndex,
   sampleForWheel,
   type TbrBook,
   type TbrFilters,
-  type TbrWheelGenre,
   TBR_WHEEL_GENRES,
   type TbrFirstInSeriesFilter,
   type TbrOwnershipMode,
 } from "@/lib/tbrWheel";
+
+const db = supabase as any;
 
 type LibraryBook = TbrBook & {
   thumbnail?: string | null;
@@ -43,50 +44,21 @@ const WHEEL_MAX = 30;
 const getLocalBooks = (): LibraryBook[] => {
   const stored = localStorage.getItem(LIBRARY_KEY);
   if (!stored) return [];
-  try {
-    return JSON.parse(stored) as LibraryBook[];
-  } catch {
-    return [];
-  }
+  try { return JSON.parse(stored) as LibraryBook[]; } catch { return []; }
 };
+const setLocalBooks = (books: LibraryBook[]) => { localStorage.setItem(LIBRARY_KEY, JSON.stringify(books)); };
 
-const setLocalBooks = (books: LibraryBook[]) => {
-  localStorage.setItem(LIBRARY_KEY, JSON.stringify(books));
-};
+const defaultFilters: TbrFilters = { genres: ["Any"], firstInSeries: "any", ownership: "library", length: "Any" };
 
-const defaultFilters: TbrFilters = {
-  genres: ["Any"],
-  firstInSeries: "any",
-  ownership: "library",
-  length: "Any",
-};
-
-type CopilotRecommendation = {
-  id: string;
-  title: string;
-  author: string;
-  genre: string;
-};
-
+type CopilotRecommendation = { id: string; title: string; author: string; genre: string };
 const normalize = (value: string) => value.trim().toLowerCase();
 
-const getSelectedGenres = (filters: TbrFilters) =>
-  filters.genres.filter((genre) => genre !== "Any") as TbrWheelGenre[];
+const getSelectedGenres = (filters: TbrFilters) => filters.genres.filter((g) => g !== "Any");
 
 const buildCopilotPrompts = (filters: TbrFilters) => {
   const selectedGenres = getSelectedGenres(filters);
-  const genrePrompt =
-    selectedGenres.length > 0
-      ? `genres: ${selectedGenres.join(", ")}`
-      : "genres: broad mix";
-
-  const firstPrompt =
-    filters.firstInSeries === "first_only"
-      ? "prefer first books in series"
-      : filters.firstInSeries === "not_first"
-      ? "prefer standalones or not-first-in-series books"
-      : "series position: any";
-
+  const genrePrompt = selectedGenres.length > 0 ? `genres: ${selectedGenres.join(", ")}` : "genres: broad mix";
+  const firstPrompt = filters.firstInSeries === "first_only" ? "prefer first books in series" : filters.firstInSeries === "not_first" ? "prefer standalones or not-first-in-series books" : "series position: any";
   return [
     `tbr recommendations, ${genrePrompt}, ${firstPrompt}`,
     `reader wants new picks, ${genrePrompt}, ${firstPrompt}`,
@@ -96,48 +68,44 @@ const buildCopilotPrompts = (filters: TbrFilters) => {
 };
 
 const parseGoogleBook = (payload: unknown) => {
-  const data = payload as {
-    items?: Array<{
-      volumeInfo?: {
-        categories?: string[];
-        pageCount?: number;
-        imageLinks?: { thumbnail?: string };
-        industryIdentifiers?: Array<{ type?: string; identifier?: string }>;
-      };
-    }>;
-  };
+  const data = payload as { items?: Array<{ volumeInfo?: { categories?: string[]; pageCount?: number; imageLinks?: { thumbnail?: string }; industryIdentifiers?: Array<{ type?: string; identifier?: string }> } }> };
   const first = data?.items?.[0]?.volumeInfo;
   if (!first) return null;
   const identifiers = first.industryIdentifiers || [];
-  const isbn13 =
-    identifiers.find((entry) => normalize(entry.type || "") === "isbn_13")?.identifier || null;
-  const isbn =
-    identifiers.find((entry) => normalize(entry.type || "") === "isbn_10")?.identifier || null;
-  return {
-    categories: first.categories || [],
-    page_count: first.pageCount ?? null,
-    thumbnail: first.imageLinks?.thumbnail || null,
-    isbn,
-    isbn13,
-  };
+  const isbn13 = identifiers.find((e) => normalize(e.type || "") === "isbn_13")?.identifier || null;
+  const isbn = identifiers.find((e) => normalize(e.type || "") === "isbn_10")?.identifier || null;
+  return { categories: first.categories || [], page_count: first.pageCount ?? null, thumbnail: first.imageLinks?.thumbnail || null, isbn, isbn13 };
 };
 
 const enrichFromGoogleBooks = async (book: CopilotRecommendation) => {
   const query = `intitle:${book.title} inauthor:${book.author}`;
   const url = new URL("https://www.googleapis.com/books/v1/volumes");
-  url.searchParams.set("q", query);
-  url.searchParams.set("maxResults", "1");
-  url.searchParams.set("printType", "books");
-  url.searchParams.set("langRestrict", "en");
+  url.searchParams.set("q", query); url.searchParams.set("maxResults", "1"); url.searchParams.set("printType", "books"); url.searchParams.set("langRestrict", "en");
+  try { const res = await fetch(url.toString()); if (!res.ok) return null; return parseGoogleBook(await res.json()); } catch { return null; }
+};
 
-  try {
-    const response = await fetch(url.toString());
-    if (!response.ok) return null;
-    const payload = await response.json();
-    return parseGoogleBook(payload);
-  } catch {
-    return null;
-  }
+// SVG Wheel helpers
+const generateSliceColors = (count: number): string[] => {
+  const style = getComputedStyle(document.documentElement);
+  const primaryHue = parseFloat(style.getPropertyValue("--primary")?.split(" ")[0]) || 220;
+  return Array.from({ length: count }, (_, i) => {
+    const hue = (primaryHue + (i * 360 / count) + i * 17) % 360;
+    const sat = 55 + (i % 3) * 10;
+    const light = 42 + (i % 2) * 12;
+    return `hsl(${hue}, ${sat}%, ${light}%)`;
+  });
+};
+
+const polarToCartesian = (cx: number, cy: number, r: number, angleDeg: number) => {
+  const rad = (angleDeg - 90) * Math.PI / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+};
+
+const describeArc = (cx: number, cy: number, r: number, startAngle: number, endAngle: number) => {
+  const start = polarToCartesian(cx, cy, r, endAngle);
+  const end = polarToCartesian(cx, cy, r, startAngle);
+  const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+  return `M ${cx} ${cy} L ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y} Z`;
 };
 
 const TbrWheel = () => {
@@ -154,150 +122,80 @@ const TbrWheel = () => {
   const [winner, setWinner] = useState<LibraryBook | null>(null);
   const [spinDuration, setSpinDuration] = useState(2800);
   const [cloudNotice, setCloudNotice] = useState<string | null>(null);
+  const [selectedGenre, setSelectedGenre] = useState<string>("All Genres");
+
+  // Dynamic genre list
+  const genreOptions = useMemo(() => {
+    const userGenres = getDistinctGenres(books);
+    if (userGenres.length > 0) return { genres: userGenres, isUserGenres: true };
+    return { genres: [...TBR_WHEEL_GENRES], isUserGenres: false };
+  }, [books]);
 
   const loadBooks = async (userIdValue: string | null) => {
-    if (!userIdValue) {
-      setBooks(getLocalBooks());
-      return;
-    }
-    const { data, error } = await retryAsync(
-      () => supabase.from("books").select("*").eq("user_id", userIdValue),
-      1,
-      350
-    );
-    if (error) {
-      setCloudNotice("Cloud library unavailable. Using local books.");
-      setBooks(getLocalBooks());
-      return;
-    }
+    if (!userIdValue) { setBooks(getLocalBooks()); return; }
+    const result: any = await retryAsync(() => db.from("books").select("*").eq("user_id", userIdValue), 1, 350);
+    const { data, error } = result;
+    if (error) { setCloudNotice("Cloud sync is unavailable — using local-only data for now."); setBooks(getLocalBooks()); return; }
     setCloudNotice(null);
     setBooks((data || []) as LibraryBook[]);
   };
 
   useEffect(() => {
-    const init = async () => {
-      const userIdValue = await getAuthenticatedUserId();
-      setUserId(userIdValue);
-      await loadBooks(userIdValue);
-      await flushAllPendingSync();
-    };
+    const init = async () => { const uid = await getAuthenticatedUserId(); setUserId(uid); await loadBooks(uid); await flushAllPendingSync(); };
     void init();
-
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      const user = session?.user ?? null;
-      setUserId(user?.id ?? null);
+      const user = session?.user ?? null; setUserId(user?.id ?? null);
       void loadBooks(user?.id ?? null);
-      if (user?.id) {
-        void flushAllPendingSync();
-      }
+      if (user?.id) void flushAllPendingSync();
     });
-
-    return () => {
-      listener.subscription.unsubscribe();
-    };
+    return () => { listener.subscription.unsubscribe(); };
   }, []);
 
-  const sourceBooks = useMemo(() => {
-      if (appliedFilters.ownership === "library") {
-        return books.filter((book) => normalize(book.status || "") === "tbr");
-      }
-      return externalCandidates;
-    }, [appliedFilters.ownership, books, externalCandidates]);
-
-  const filtered = useMemo(
-    () => applyTbrFilters(sourceBooks, appliedFilters),
-    [sourceBooks, appliedFilters]
-  );
-
-  const displayed = useMemo(() => {
-    void sampleNonce;
-    return sampleForWheel(filtered, WHEEL_MAX);
-  }, [filtered, sampleNonce]);
-
+  // Update filters when genre dropdown changes
   useEffect(() => {
-    setWheelBooks(displayed);
-  }, [displayed]);
+    if (selectedGenre === "All Genres") {
+      setFilters((prev) => ({ ...prev, genres: ["Any"] }));
+    } else {
+      setFilters((prev) => ({ ...prev, genres: [selectedGenre] }));
+    }
+  }, [selectedGenre]);
 
-  const refreshSample = () => {
-    setSampleNonce((value) => value + 1);
-    setWinner(null);
-    setRotation(0);
-  };
+  const sourceBooks = useMemo(() => {
+    if (appliedFilters.ownership === "library") return books.filter((b) => normalize(b.status || "") === "tbr");
+    return externalCandidates;
+  }, [appliedFilters.ownership, books, externalCandidates]);
+
+  const filtered = useMemo(() => applyTbrFilters(sourceBooks, appliedFilters), [sourceBooks, appliedFilters]);
+  const displayed = useMemo(() => { void sampleNonce; return sampleForWheel(filtered, WHEEL_MAX); }, [filtered, sampleNonce]);
+  useEffect(() => { setWheelBooks(displayed); }, [displayed]);
+
+  const refreshSample = () => { setSampleNonce((v) => v + 1); setWinner(null); setRotation(0); };
 
   const loadExternalCandidates = async (nextFilters: TbrFilters) => {
-    if (!userId) {
-      setExternalCandidates([]);
-      toast.error("Sign in to get recommendations outside your library.");
-      return;
-    }
-
+    if (!userId) { setExternalCandidates([]); toast.error("Sign in to get recommendations outside your library."); return; }
     setLoadingExternal(true);
     const prompts = buildCopilotPrompts(nextFilters);
-
-    const results = await Promise.all(
-      prompts.map(async (prompt) => {
-        const { data, error } = await supabase.functions.invoke("reading-copilot", {
-          body: {
-            prompt,
-            tags: getSelectedGenres(nextFilters).map((genre) => normalize(genre)),
-            surprise: 55,
-            limit: 6,
-          },
-        });
-        if (error) return [] as CopilotRecommendation[];
-        const recs = (data?.recommendations || []) as CopilotRecommendation[];
-        return recs;
-      })
-    );
-
+    const results = await Promise.all(prompts.map(async (prompt) => {
+      const { data, error } = await supabase.functions.invoke("reading-copilot", { body: { prompt, tags: getSelectedGenres(nextFilters).map((g) => normalize(g)), surprise: 55, limit: 6 } });
+      if (error) return [] as CopilotRecommendation[];
+      return (data?.recommendations || []) as CopilotRecommendation[];
+    }));
     const flat = results.flat();
-    if (flat.length === 0) {
-      setExternalCandidates([]);
-      setLoadingExternal(false);
-      toast.error("Could not load recommendation candidates from Copilot.");
-      return;
-    }
-
-    const enriched = await Promise.all(
-      flat.map(async (candidate) => {
-        const meta = await enrichFromGoogleBooks(candidate);
-        return {
-          id: candidate.id,
-          title: candidate.title,
-          author: candidate.author,
-          genre: meta?.categories?.[0] || candidate.genre || null,
-          status: "tbr",
-          is_first_in_series: false,
-          series_name: null,
-          page_count: meta?.page_count ?? null,
-          thumbnail: meta?.thumbnail || null,
-          isbn: meta?.isbn || null,
-          isbn13: meta?.isbn13 || null,
-          source: "copilot_recommendation",
-        } as LibraryBook;
-      })
-    );
-
+    if (flat.length === 0) { setExternalCandidates([]); setLoadingExternal(false); toast.error("Could not load recommendation candidates from Copilot."); return; }
+    const enriched = await Promise.all(flat.map(async (c) => {
+      const meta = await enrichFromGoogleBooks(c);
+      return { id: c.id, title: c.title, author: c.author, genre: meta?.categories?.[0] || c.genre || null, status: "tbr", is_first_in_series: false, series_name: null, page_count: meta?.page_count ?? null, thumbnail: meta?.thumbnail || null, isbn: meta?.isbn || null, isbn13: meta?.isbn13 || null, source: "copilot_recommendation" } as LibraryBook;
+    }));
     const deduped = dedupeCandidatesAgainstOwned(enriched, books);
-    setExternalCandidates(deduped);
-    setLoadingExternal(false);
-    if (deduped.length === 0) {
-      toast.error("No non-owned recommendations matched your filters.");
-    }
+    setExternalCandidates(deduped); setLoadingExternal(false);
+    if (deduped.length === 0) toast.error("No non-owned recommendations matched your filters.");
   };
 
   const applyFilters = async () => {
-    const next = {
-      ...filters,
-      length: filters.ownership === "library" ? "Any" : filters.length,
-    };
+    const next = { ...filters, length: filters.ownership === "library" ? "Any" as const : filters.length };
     setAppliedFilters(next);
-    if (next.ownership === "not_owned") {
-      await loadExternalCandidates(next);
-    }
-    setWinner(null);
-    setRotation(0);
-    setSampleNonce((value) => value + 1);
+    if (next.ownership === "not_owned") await loadExternalCandidates(next);
+    setWinner(null); setRotation(0); setSampleNonce((v) => v + 1);
   };
 
   const spin = () => {
@@ -305,177 +203,77 @@ const TbrWheel = () => {
     const winnerIndex = pickWinnerIndex(wheelBooks.length);
     const anglePer = 360 / wheelBooks.length;
     const turns = 3;
-    const targetRotation =
-      rotation + turns * 360 + (360 - winnerIndex * anglePer - anglePer / 2);
-    setSpinDuration(2800);
-    setRotation(targetRotation);
-    setSpinning(true);
-    setTimeout(() => {
-      setWinner(wheelBooks[winnerIndex] ?? null);
-      setSpinning(false);
-    }, 2800);
+    const targetRotation = rotation + turns * 360 + (360 - winnerIndex * anglePer - anglePer / 2);
+    setSpinDuration(2800); setRotation(targetRotation); setSpinning(true);
+    setTimeout(() => { setWinner(wheelBooks[winnerIndex] ?? null); setSpinning(false); }, 2800);
   };
 
   const addWinnerToLibrary = async () => {
     if (!winner) return;
-    const payload = {
-      title: winner.title,
-      author: winner.author,
-      genre: winner.genre || "",
-      series_name: winner.series_name || null,
-      is_first_in_series: winner.is_first_in_series === true,
-      status: "tbr",
-      page_count: winner.page_count ?? null,
-      thumbnail: winner.thumbnail || null,
-      isbn: winner.isbn || null,
-      isbn13: winner.isbn13 || null,
-      source: winner.source || "tbr_wheel",
-    };
-
+    const payload = { title: winner.title, author: winner.author, genre: winner.genre || "", series_name: winner.series_name || null, is_first_in_series: winner.is_first_in_series === true, status: "tbr", page_count: winner.page_count ?? null, thumbnail: winner.thumbnail || null, isbn: winner.isbn || null, isbn13: winner.isbn13 || null, source: winner.source || "tbr_wheel" };
     if (userId) {
       const { error } = await upsertBooksToCloud(userId, [payload]);
-      if (error) {
-        enqueueLibrarySync(userId, [payload], "tbr_wheel_add");
-        setCloudNotice("TBR add queued for cloud sync.");
-        return;
-      }
+      if (error) { enqueueLibrarySync(userId, [payload], "tbr_wheel_add"); setCloudNotice("TBR add queued for cloud sync."); return; }
       await loadBooks(userId);
-      setExternalCandidates((current) =>
-        current.filter(
-          (entry) =>
-            !(
-              normalize(entry.title) === normalize(winner.title) &&
-              normalize(entry.author) === normalize(winner.author)
-            )
-        )
-      );
-      toast.success("Added to your library as TBR.");
-      return;
+      setExternalCandidates((cur) => cur.filter((e) => !(normalize(e.title) === normalize(winner.title) && normalize(e.author) === normalize(winner.author))));
+      toast.success("Added to your library as TBR."); return;
     }
-
-    const nextBooks = [{ ...payload }, ...books];
-    setBooks(nextBooks);
-    setLocalBooks(nextBooks);
+    const nextBooks = [{ ...payload }, ...books]; setBooks(nextBooks); setLocalBooks(nextBooks);
     toast.success("Added to your local library as TBR.");
   };
 
   const startReading = async () => {
     if (!winner) return;
     if (userId && winner.id) {
-      const { error } = await supabase
-        .from("books")
-        .update({ status: "reading" })
-        .eq("id", winner.id);
-      if (error) {
-        toast.error("Could not update status.");
-        return;
-      }
-      await loadBooks(userId);
-      toast.success("Marked as reading.");
-      return;
+      const { error } = await db.from("books").update({ status: "reading" }).eq("id", winner.id);
+      if (error) { toast.error("Could not update status."); return; }
+      await loadBooks(userId); toast.success("Marked as reading."); return;
     }
-
-    const next = books.map((book) =>
-      book.title === winner.title && book.author === winner.author
-        ? { ...book, status: "reading" }
-        : book
-    );
-    setBooks(next);
-    setLocalBooks(next);
-    toast.success("Marked as reading.");
+    const next = books.map((b) => b.title === winner.title && b.author === winner.author ? { ...b, status: "reading" } : b);
+    setBooks(next); setLocalBooks(next); toast.success("Marked as reading.");
   };
 
   const saveToHistory = async () => {
     if (!winner || !userId) return;
-    const { error } = await supabase.from("copilot_recommendations").insert({
-      user_id: userId,
-      book_id: winner.id ?? null,
-      title: winner.title,
-      author: winner.author,
-      genre: winner.genre ?? null,
-      tags: [],
-      summary: null,
-      source: "tbr_wheel",
-      reasons: ["Selected via TBR Wheel."],
-      why_new: null,
-    });
-    if (error) {
-      toast.error("Could not save to history.");
-      return;
-    }
+    const { error } = await db.from("copilot_recommendations").insert({ user_id: userId, book_id: winner.id ?? null, title: winner.title, author: winner.author, genre: winner.genre ?? null, tags: [], summary: null, source: "tbr_wheel", reasons: ["Selected via TBR Wheel."], why_new: null });
+    if (error) { toast.error("Could not save to history."); return; }
     toast.success("Saved to recently recommended.");
   };
+
+  const sliceColors = useMemo(() => generateSliceColors(wheelBooks.length), [wheelBooks.length]);
+  const cx = 130, cy = 130, r = 120;
 
   return (
     <main className="container mx-auto px-4 pt-24 pb-16">
       <div className="mb-8">
         <h1 className="font-display text-4xl font-bold">TBR Wheel</h1>
-        <p className="text-muted-foreground mt-2 font-body">
-          Reduce decision fatigue and spin your next read.
-        </p>
+        <p className="text-muted-foreground mt-2 font-body">Reduce decision fatigue and spin your next read.</p>
       </div>
-      {cloudNotice && (
-        <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground">
-          {cloudNotice}
-        </div>
-      )}
+      {cloudNotice && <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground">{cloudNotice}</div>}
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
         <section className="rounded-xl border border-border/60 bg-card/70 p-6">
-          <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">
-            Filters
-          </div>
+          <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Filters</div>
           <div className="mt-4 grid gap-4">
+            {/* Genre dropdown */}
             <div className="grid gap-2">
               <label className="text-sm font-medium">Genre</label>
-              <div className="rounded-lg border border-border/60 bg-background/60 p-3 grid gap-2">
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={filters.genres.includes("Any")}
-                    onCheckedChange={(checked) =>
-                      setFilters((prev) => ({
-                        ...prev,
-                        genres: checked ? ["Any"] : [],
-                      }))
-                    }
-                  />
-                  Any
-                </label>
-                {TBR_WHEEL_GENRES.map((genre) => (
-                  <label key={genre} className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={filters.genres.includes(genre)}
-                      onCheckedChange={(checked) =>
-                        setFilters((prev) => {
-                          const withoutAny = prev.genres.filter((value) => value !== "Any");
-                          if (checked) {
-                            return { ...prev, genres: [...withoutAny, genre] };
-                          }
-                          const nextGenres = withoutAny.filter((value) => value !== genre);
-                          return { ...prev, genres: nextGenres.length ? nextGenres : ["Any"] };
-                        })
-                      }
-                    />
-                    {genre}
-                  </label>
-                ))}
-              </div>
+              <Select value={selectedGenre} onValueChange={setSelectedGenre}>
+                <SelectTrigger><SelectValue placeholder="Select genre" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="All Genres">All Genres</SelectItem>
+                  {genreOptions.genres.map((g) => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {!genreOptions.isUserGenres && (
+                <p className="text-xs text-muted-foreground/70 italic">These are starter genres. Import your library to see your personal genres.</p>
+              )}
             </div>
 
             <div className="grid gap-2">
               <label className="text-sm font-medium">First in series</label>
-              <Select
-                value={filters.firstInSeries}
-                onValueChange={(value) =>
-                  setFilters((prev) => ({
-                    ...prev,
-                    firstInSeries: value as TbrFirstInSeriesFilter,
-                  }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Series filter" />
-                </SelectTrigger>
+              <Select value={filters.firstInSeries} onValueChange={(v) => setFilters((p) => ({ ...p, firstInSeries: v as TbrFirstInSeriesFilter }))}>
+                <SelectTrigger><SelectValue placeholder="Series filter" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="any">Any</SelectItem>
                   <SelectItem value="first_only">First in series only</SelectItem>
@@ -486,38 +284,21 @@ const TbrWheel = () => {
 
             <div className="grid gap-2">
               <label className="text-sm font-medium">Ownership</label>
-              <Select
-                value={filters.ownership}
-                onValueChange={(value) =>
-                  setFilters((prev) => ({
-                    ...prev,
-                    ownership: value as TbrOwnershipMode,
-                    length: value === "library" ? "Any" : prev.length,
-                  }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select ownership mode" />
-                </SelectTrigger>
+              <Select value={filters.ownership} onValueChange={(v) => setFilters((p) => ({ ...p, ownership: v as TbrOwnershipMode, length: v === "library" ? "Any" : p.length }))}>
+                <SelectTrigger><SelectValue placeholder="Select ownership mode" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="library">In my library</SelectItem>
                   <SelectItem value="not_owned">Not owned / recommend outside my library</SelectItem>
                 </SelectContent>
               </Select>
-              {filters.ownership === "not_owned" && (
-                <div className="text-xs text-muted-foreground">
-                  In-library mode always spins from your TBR books.
-                </div>
-              )}
+              {filters.ownership === "not_owned" && <div className="text-xs text-muted-foreground">In-library mode always spins from your TBR books.</div>}
             </div>
 
             {filters.ownership !== "library" && (
               <div className="grid gap-2">
                 <label className="text-sm font-medium">Length</label>
-                <Select value={filters.length} onValueChange={(value) => setFilters((prev) => ({ ...prev, length: value as TbrFilters["length"] }))}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select length" />
-                  </SelectTrigger>
+                <Select value={filters.length} onValueChange={(v) => setFilters((p) => ({ ...p, length: v as TbrFilters["length"] }))}>
+                  <SelectTrigger><SelectValue placeholder="Select length" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="Any">Any</SelectItem>
                     <SelectItem value="<250">&lt;250 pages</SelectItem>
@@ -528,13 +309,8 @@ const TbrWheel = () => {
               </div>
             )}
 
-            <Button onClick={() => void applyFilters()} disabled={loadingExternal}>
-              {loadingExternal ? "Loading candidates..." : "Apply filters"}
-            </Button>
-
-            <div className="text-sm text-muted-foreground">
-              Matching books: {filtered.length}
-            </div>
+            <Button onClick={() => void applyFilters()} disabled={loadingExternal}>{loadingExternal ? "Loading candidates..." : "Apply filters"}</Button>
+            <div className="text-sm text-muted-foreground">Matching books: {filtered.length}</div>
           </div>
         </section>
 
@@ -542,16 +318,12 @@ const TbrWheel = () => {
           {loadingExternal ? (
             <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-8 text-center">
               <h3 className="font-display text-xl font-bold mb-2">Building your candidate wheel</h3>
-              <p className="text-sm text-muted-foreground font-body mb-4">
-                Generating non-owned recommendations and enriching metadata.
-              </p>
+              <p className="text-sm text-muted-foreground font-body mb-4">Generating non-owned recommendations and enriching metadata.</p>
             </div>
           ) : filtered.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-8 text-center">
               <h3 className="font-display text-xl font-bold mb-2">No matches yet</h3>
-              <p className="text-sm text-muted-foreground font-body mb-4">
-                Try loosening your filters or add more TBR books.
-              </p>
+              <p className="text-sm text-muted-foreground font-body mb-4">Try loosening your filters or add more TBR books.</p>
             </div>
           ) : (
             <>
@@ -559,46 +331,49 @@ const TbrWheel = () => {
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between mb-4">
                     <div>
-                      <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">
-                        Wheel
-                      </div>
+                      <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Wheel</div>
                       <h3 className="font-display text-xl font-bold mt-1">Spin your TBR</h3>
                     </div>
-                    <Button onClick={spin} disabled={spinning || wheelBooks.length === 0}>
-                      <RotateCw className="w-4 h-4 mr-2" />
-                      {spinning ? "Spinning..." : "Spin"}
-                    </Button>
+                    <Button onClick={spin} disabled={spinning || wheelBooks.length === 0}><RotateCw className="w-4 h-4 mr-2" />{spinning ? "Spinning..." : "Spin"}</Button>
                   </div>
-                  <div className="relative mx-auto mt-2 h-64 w-64 rounded-full border border-border/60 bg-background/70 overflow-hidden">
-                    <div
-                      className="absolute inset-0 flex items-center justify-center transition-transform ease-out"
-                      style={{ transform: `rotate(${rotation}deg)`, transitionDuration: `${spinDuration}ms` }}
-                    >
-                      <ul className="absolute inset-0">
-                        {wheelBooks.map((book, index) => {
-                          const angle = (360 / wheelBooks.length) * index;
-                          return (
-                            <li
-                              key={`${book.title}-${index}`}
-                              className="absolute left-1/2 top-1/2 origin-[0_0] text-xs text-muted-foreground"
-                              style={{ transform: `rotate(${angle}deg) translate(90px) rotate(90deg)` }}
-                            >
-                              {book.title}
-                            </li>
-                          );
-                        })}
-                      </ul>
+
+                  {/* SVG Wheel */}
+                  <div className="relative mx-auto mt-2" style={{ width: cx * 2, height: cy * 2 }}>
+                    {/* Pointer */}
+                    <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1 z-10">
+                      <div className="w-0 h-0 border-l-[10px] border-r-[10px] border-t-[18px] border-l-transparent border-r-transparent border-t-primary" />
                     </div>
-                    <div className="absolute top-1/2 left-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary" />
+                    <svg width={cx * 2} height={cy * 2} viewBox={`0 0 ${cx * 2} ${cy * 2}`}
+                      style={{ transform: `rotate(${rotation}deg)`, transition: `transform ${spinDuration}ms cubic-bezier(0.17, 0.67, 0.12, 0.99)` }}>
+                      {wheelBooks.map((book, i) => {
+                        const anglePer = 360 / wheelBooks.length;
+                        const startAngle = i * anglePer;
+                        const endAngle = startAngle + anglePer;
+                        const midAngle = startAngle + anglePer / 2;
+                        const labelR = r * 0.65;
+                        const labelPos = polarToCartesian(cx, cy, labelR, midAngle);
+                        const maxChars = Math.max(6, Math.floor(anglePer / 3));
+                        const label = book.title.length > maxChars ? book.title.slice(0, maxChars - 1) + "…" : book.title;
+                        const isWinner = !spinning && winner && winner.title === book.title;
+                        return (
+                          <g key={`${book.title}-${i}`}>
+                            <path d={describeArc(cx, cy, r, startAngle, endAngle)} fill={sliceColors[i]} stroke="hsl(var(--background))" strokeWidth="1.5"
+                              opacity={isWinner ? 1 : 0.85} />
+                            <text x={labelPos.x} y={labelPos.y} textAnchor="middle" dominantBaseline="central"
+                              fill="white" fontSize={wheelBooks.length > 15 ? 7 : wheelBooks.length > 8 ? 9 : 11}
+                              fontWeight="600" transform={`rotate(${midAngle}, ${labelPos.x}, ${labelPos.y})`}>
+                              {label}
+                            </text>
+                          </g>
+                        );
+                      })}
+                    </svg>
                   </div>
+
                   {filtered.length > WHEEL_MAX && (
                     <div className="mt-3 flex items-center justify-between gap-3">
-                      <p className="text-xs text-muted-foreground">
-                        Spinning among a random sample of {WHEEL_MAX} of {filtered.length} matches.
-                      </p>
-                      <Button size="sm" variant="outline" onClick={refreshSample}>
-                        Refresh sample
-                      </Button>
+                      <p className="text-xs text-muted-foreground">Spinning among a random sample of {WHEEL_MAX} of {filtered.length} matches.</p>
+                      <Button size="sm" variant="outline" onClick={refreshSample}>Refresh sample</Button>
                     </div>
                   )}
                 </CardContent>
@@ -607,40 +382,24 @@ const TbrWheel = () => {
               {winner && (
                 <Card className="border-border/60 bg-card/80">
                   <CardContent className="p-6">
-                    <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">
-                      Winner
-                    </div>
+                    <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Winner</div>
                     <div className="mt-3 flex gap-4">
                       {winner.thumbnail ? (
-                        <img
-                          src={winner.thumbnail}
-                          alt={winner.title}
-                          className="h-24 w-16 rounded-md object-cover"
-                        />
+                        <img src={winner.thumbnail} alt={winner.title} className="h-24 w-16 rounded-md object-cover" />
                       ) : (
-                        <div className="h-24 w-16 rounded-md bg-secondary/60 flex items-center justify-center text-xs text-muted-foreground">
-                          <BookOpen className="w-4 h-4" />
-                        </div>
+                        <div className="h-24 w-16 rounded-md bg-secondary/60 flex items-center justify-center text-xs text-muted-foreground"><BookOpen className="w-4 h-4" /></div>
                       )}
                       <div>
                         <h3 className="font-display text-xl font-bold">{winner.title}</h3>
                         <p className="text-sm text-muted-foreground">{winner.author}</p>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {appliedFilters.ownership === "library" ? (
-                            <Button size="sm" onClick={startReading}>
-                              Start Reading
-                            </Button>
+                            <Button size="sm" onClick={startReading}>Start Reading</Button>
                           ) : (
-                            <Button size="sm" onClick={addWinnerToLibrary}>
-                              Add to Library (TBR)
-                            </Button>
+                            <Button size="sm" onClick={addWinnerToLibrary}>Add to Library (TBR)</Button>
                           )}
-                          <Button size="sm" variant="outline" onClick={spin}>
-                            Spin again
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={saveToHistory}>
-                            Save to Recently Recommended
-                          </Button>
+                          <Button size="sm" variant="outline" onClick={spin}>Spin again</Button>
+                          <Button size="sm" variant="ghost" onClick={saveToHistory}>Save to Recently Recommended</Button>
                         </div>
                       </div>
                     </div>
