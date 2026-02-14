@@ -12,10 +12,14 @@ export type TbrBook = {
 
 export const TBR_WHEEL_GENRES = [
   "Fantasy",
-  "Science Fiction",
-  "History",
   "Romance",
-  "Thriller",
+  "Mystery/Thriller",
+  "Sci-Fi",
+  "Historical Fiction",
+  "Nonfiction",
+  "Biography/Memoir",
+  "YA",
+  "Horror",
 ] as const;
 
 export type TbrWheelGenre = (typeof TBR_WHEEL_GENRES)[number];
@@ -23,7 +27,7 @@ export type TbrFirstInSeriesFilter = "any" | "first_only" | "not_first";
 export type TbrOwnershipMode = "library" | "not_owned";
 
 export type TbrFilters = {
-  genres: ("Any" | TbrWheelGenre)[];
+  genres: ("Any" | string)[];
   firstInSeries: TbrFirstInSeriesFilter;
   ownership: TbrOwnershipMode;
   length: "Any" | "<250" | "250-400" | "400+";
@@ -31,7 +35,7 @@ export type TbrFilters = {
 
 const normalize = (value: string) => value.trim().toLowerCase();
 
-const includesGenre = (value: string, genre: TbrWheelGenre) => {
+const includesGenre = (value: string, genre: string) => {
   const normalizedValue = normalize(value);
   const normalizedGenre = normalize(genre);
   if (normalizedValue === normalizedGenre) return true;
@@ -111,4 +115,18 @@ export const sampleForWheel = (books: TbrBook[], max = 30) => {
 export const pickWinnerIndex = (count: number) => {
   if (count <= 0) return -1;
   return Math.floor(Math.random() * count);
+};
+
+export const getDistinctGenres = (books: TbrBook[]): string[] => {
+  const genreSet = new Map<string, string>();
+  for (const book of books) {
+    if (!book.genre) continue;
+    const trimmed = book.genre.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!genreSet.has(key)) {
+      genreSet.set(key, trimmed);
+    }
+  }
+  return [...genreSet.values()].sort((a, b) => a.localeCompare(b));
 };

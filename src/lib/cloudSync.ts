@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 export const SYNC_EVENT = "shelfguide-sync-updated";
 const LIBRARY_QUEUE_KEY = "shelfguide-pending-library-sync";
 const FEEDBACK_QUEUE_KEY = "shelfguide-pending-feedback-sync";
+const LAST_SYNC_ERROR_KEY = "shelfguide-last-sync-error";
 const MAX_SYNC_ATTEMPTS = 5;
 const ORPHANED_QUEUE_ERROR = "Queued item missing user_id. Dismiss and recreate while signed in.";
 
@@ -70,6 +71,48 @@ export type NeedsAttentionItem = {
   created_at: string;
 };
 
+export type SyncErrorClass = "network" | "auth" | "permission" | "other";
+
+export type LastSyncError = {
+  message: string;
+  errorClass: SyncErrorClass;
+  timestamp: string;
+};
+
+const classifyError = (msg: string): SyncErrorClass => {
+  const lower = msg.toLowerCase();
+  if (lower.includes("fetch") || lower.includes("network") || lower.includes("offline") || lower.includes("failed to fetch"))
+    return "network";
+  if (lower.includes("401") || lower.includes("403") || lower.includes("auth") || lower.includes("jwt") || lower.includes("token"))
+    return "auth";
+  if (lower.includes("rls") || lower.includes("permission") || lower.includes("policy") || lower.includes("row-level"))
+    return "permission";
+  return "other";
+};
+
+export const setLastSyncError = (message: string) => {
+  const entry: LastSyncError = {
+    message,
+    errorClass: classifyError(message),
+    timestamp: new Date().toISOString(),
+  };
+  localStorage.setItem(LAST_SYNC_ERROR_KEY, JSON.stringify(entry));
+};
+
+export const clearLastSyncError = () => {
+  localStorage.removeItem(LAST_SYNC_ERROR_KEY);
+};
+
+export const getLastSyncError = (): LastSyncError | null => {
+  try {
+    const raw = localStorage.getItem(LAST_SYNC_ERROR_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as LastSyncError;
+  } catch {
+    return null;
+  }
+};
+
 const readJson = <T>(key: string): T[] => {
   const raw = localStorage.getItem(key);
   if (!raw) return [];
@@ -85,12 +128,13 @@ const readLibraryQueue = () =>
     user_id: task.user_id ?? null,
     id: task.id || nextId(),
     operation: "library_upsert" as const,
-    status:
+    status: (
       task.user_id == null
         ? "needs_attention"
         : task.status === "needs_attention"
         ? "needs_attention"
-        : "pending",
+        : "pending"
+    ) as "pending" | "needs_attention",
     attempt_count:
       task.user_id == null
         ? MAX_SYNC_ATTEMPTS
@@ -110,12 +154,13 @@ const readFeedbackQueue = () =>
     user_id: task.user_id ?? null,
     id: task.id || nextId(),
     operation: "feedback_insert" as const,
-    status:
+    status: (
       task.user_id == null
         ? "needs_attention"
         : task.status === "needs_attention"
         ? "needs_attention"
-        : "pending",
+        : "pending"
+    ) as "pending" | "needs_attention",
     attempt_count:
       task.user_id == null
         ? MAX_SYNC_ATTEMPTS
@@ -235,7 +280,7 @@ export const getAuthenticatedUserId = async () => {
 
 export const upsertBooksToCloud = async (userId: string, books: CloudBookUpsert[]) => {
   if (!books.length) return { data: null, error: null };
-  return supabase
+  return (supabase as any)
     .from("books")
     .upsert(
       books.map((book) => ({
@@ -260,8 +305,8 @@ export const enqueueLibrarySync = (
     {
       user_id: userId,
       id: nextId(),
-      operation: "library_upsert",
-      status: "pending",
+      operation: "library_upsert" as const,
+      status: "pending" as const,
       attempt_count: 0,
       last_error: null,
       last_attempt_at: null,
@@ -281,8 +326,8 @@ export const enqueueFeedbackSync = (userId: string | null, entry: FeedbackQueueE
     {
       user_id: userId,
       id: nextId(),
-      operation: "feedback_insert",
-      status: "pending",
+      operation: "feedback_insert" as const,
+      status: "pending" as const,
       attempt_count: 0,
       last_error: null,
       last_attempt_at: null,
@@ -311,11 +356,12 @@ export const flushLibraryQueue = async (userId: string) => {
     if (task.status === "needs_attention" || task.attempt_count >= MAX_SYNC_ATTEMPTS) {
       remaining.push({
         ...task,
-        status: "needs_attention",
+        status: "needs_attention" as const,
       });
       continue;
     }
-    const { error } = await retryAsync(() => upsertBooksToCloud(userId, task.books), 1, 450);
+    const result = await retryAsync(() => upsertBooksToCloud(userId, task.books), 1, 450);
+    const error = (result as any)?.error;
     if (error) {
       const nextAttempt = task.attempt_count + 1;
       remaining.push({
@@ -323,16 +369,18 @@ export const flushLibraryQueue = async (userId: string) => {
         attempt_count: nextAttempt,
         last_error: error.message,
         last_attempt_at: new Date().toISOString(),
-        status: nextAttempt >= MAX_SYNC_ATTEMPTS ? "needs_attention" : "pending",
+        status: (nextAttempt >= MAX_SYNC_ATTEMPTS ? "needs_attention" : "pending") as "pending" | "needs_attention",
       });
       failed += 1;
       errorMessages.push(error.message);
+      setLastSyncError(error.message);
       continue;
     }
     synced += task.books.length;
   }
 
   writeJson(LIBRARY_QUEUE_KEY, remaining.reverse());
+  if (synced > 0 && failed === 0) clearLastSyncError();
   return { synced, failed, errorMessages };
 };
 
@@ -353,7 +401,7 @@ export const flushFeedbackQueue = async (userId: string) => {
     if (task.status === "needs_attention" || task.attempt_count >= MAX_SYNC_ATTEMPTS) {
       remaining.push({
         ...task,
-        status: "needs_attention",
+        status: "needs_attention" as const,
       });
       continue;
     }
@@ -363,15 +411,15 @@ export const flushFeedbackQueue = async (userId: string) => {
         attempt_count: MAX_SYNC_ATTEMPTS,
         last_error: "Missing required feedback fields.",
         last_attempt_at: new Date().toISOString(),
-        status: "needs_attention",
+        status: "needs_attention" as const,
       });
       failed += 1;
       errorMessages.push("Missing required feedback fields.");
       continue;
     }
-    const { error } = await retryAsync(
+    const result = await retryAsync(
       () =>
-        supabase.from("copilot_feedback").insert([
+        (supabase as any).from("copilot_feedback").insert([
           {
             ...task.entry,
             user_id: userId,
@@ -380,6 +428,7 @@ export const flushFeedbackQueue = async (userId: string) => {
       1,
       450
     );
+    const error = (result as any)?.error;
     if (error) {
       const nextAttempt = task.attempt_count + 1;
       remaining.push({
@@ -387,16 +436,18 @@ export const flushFeedbackQueue = async (userId: string) => {
         attempt_count: nextAttempt,
         last_error: error.message,
         last_attempt_at: new Date().toISOString(),
-        status: nextAttempt >= MAX_SYNC_ATTEMPTS ? "needs_attention" : "pending",
+        status: (nextAttempt >= MAX_SYNC_ATTEMPTS ? "needs_attention" : "pending") as "pending" | "needs_attention",
       });
       failed += 1;
       errorMessages.push(error.message);
+      setLastSyncError(error.message);
       continue;
     }
     synced += 1;
   }
 
   writeJson(FEEDBACK_QUEUE_KEY, remaining.reverse());
+  if (synced > 0 && failed === 0) clearLastSyncError();
   return { synced, failed, errorMessages };
 };
 

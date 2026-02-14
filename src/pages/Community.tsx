@@ -24,7 +24,7 @@ const Community = () => {
   useEffect(() => {
     const runSearch = async () => {
       setLoading(true);
-      let request = supabase
+      let request = (supabase as any)
         .from("profiles")
         .select("user_id,username,display_name,is_public,created_at")
         .eq("is_public", true)
@@ -106,4 +106,3 @@ const Community = () => {
 };
 
 export default Community;
-

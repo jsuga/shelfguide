@@ -28,7 +28,7 @@ const PublicProfile = () => {
       const viewerId = sessionData.session?.user?.id ?? null;
       setViewerUserId(viewerId);
 
-      const { data: foundProfile } = await supabase
+      const { data: foundProfile } = await (supabase as any)
         .from("profiles")
         .select("user_id,username,display_name,is_public,created_at")
         .eq("username", username.toLowerCase())
@@ -50,7 +50,7 @@ const PublicProfile = () => {
       }
 
       setProfile(castProfile);
-      const { data: profileBooks } = await supabase
+      const { data: profileBooks } = await (supabase as any)
         .from("books")
         .select("id,title,author,genre,status,series_name")
         .eq("user_id", castProfile.user_id)
@@ -127,4 +127,3 @@ const PublicProfile = () => {
 };
 
 export default PublicProfile;
-
