@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Sparkles, RotateCw, BookOpen, X } from "lucide-react";
+import { Sparkles, RotateCw, BookOpen, X, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
@@ -102,11 +103,19 @@ const polarToCartesian = (cx: number, cy: number, r: number, angleDeg: number) =
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
 };
 
-const describeArc = (cx: number, cy: number, r: number, startAngle: number, endAngle: number) => {
-  const start = polarToCartesian(cx, cy, r, endAngle);
-  const end = polarToCartesian(cx, cy, r, startAngle);
+const describeArc = (cx: number, cy: number, outerR: number, innerR: number, startAngle: number, endAngle: number) => {
+  const outerStart = polarToCartesian(cx, cy, outerR, endAngle);
+  const outerEnd = polarToCartesian(cx, cy, outerR, startAngle);
+  const innerStart = polarToCartesian(cx, cy, innerR, startAngle);
+  const innerEnd = polarToCartesian(cx, cy, innerR, endAngle);
   const largeArc = endAngle - startAngle > 180 ? 1 : 0;
-  return `M ${cx} ${cy} L ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y} Z`;
+  return [
+    `M ${outerStart.x} ${outerStart.y}`,
+    `A ${outerR} ${outerR} 0 ${largeArc} 0 ${outerEnd.x} ${outerEnd.y}`,
+    `L ${innerStart.x} ${innerStart.y}`,
+    `A ${innerR} ${innerR} 0 ${largeArc} 1 ${innerEnd.x} ${innerEnd.y}`,
+    `Z`,
+  ].join(" ");
 };
 
 const TbrWheel = () => {
@@ -125,7 +134,8 @@ const TbrWheel = () => {
   const [winner, setWinner] = useState<LibraryBook | null>(null);
   const [spinDuration, setSpinDuration] = useState(2800);
   const [cloudNotice, setCloudNotice] = useState<string | null>(null);
-  const [selectedGenre, setSelectedGenre] = useState<string>("All Genres");
+  // Multi-genre selection
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
 
   // Dynamic genre list
   const genreOptions = useMemo(() => {
@@ -154,17 +164,28 @@ const TbrWheel = () => {
     return () => { listener.subscription.unsubscribe(); };
   }, []);
 
-  // Update filters when genre dropdown changes
+  // Update filters when genre selection changes
   useEffect(() => {
-    if (selectedGenre === "All Genres") {
+    if (selectedGenres.length === 0) {
       setFilters((prev) => ({ ...prev, genres: ["Any"] }));
     } else {
-      setFilters((prev) => ({ ...prev, genres: [selectedGenre] }));
+      setFilters((prev) => ({ ...prev, genres: selectedGenres }));
     }
-  }, [selectedGenre]);
+  }, [selectedGenres]);
+
+  const toggleGenre = useCallback((genre: string) => {
+    setSelectedGenres((prev) => {
+      if (prev.includes(genre)) return prev.filter((g) => g !== genre);
+      return [...prev, genre];
+    });
+  }, []);
+
+  const selectAllGenres = useCallback(() => {
+    setSelectedGenres([]);
+  }, []);
 
   const sourceBooks = useMemo(() => {
-    if (appliedFilters.ownership === "library") return books.filter((b) => normalize(b.status || "") === "tbr");
+    if (appliedFilters.ownership === "library") return books.filter((b) => normalize(b.status || "") === "tbr" || normalize(b.status || "") === "want_to_read" || normalize(b.status || "") === "to-read");
     return externalCandidates;
   }, [appliedFilters.ownership, books, externalCandidates]);
 
@@ -201,15 +222,24 @@ const TbrWheel = () => {
     setWinner(null); setRotation(0); setSampleNonce((v) => v + 1);
   };
 
+  // Spin: opens full-screen AND starts animation immediately
   const spin = () => {
     if (wheelBooks.length === 0 || spinning) return;
+    setWinner(null); // Clear previous winner — result only shown after animation ends
     setFullScreenSpin(true);
     const winnerIndex = pickWinnerIndex(wheelBooks.length);
     const anglePer = 360 / wheelBooks.length;
-    const turns = 3;
+    const turns = 4 + Math.floor(Math.random() * 2);
     const targetRotation = rotation + turns * 360 + (360 - winnerIndex * anglePer - anglePer / 2);
-    setSpinDuration(2800); setRotation(targetRotation); setSpinning(true);
-    setTimeout(() => { setWinner(wheelBooks[winnerIndex] ?? null); setSpinning(false); }, 2800);
+    setSpinDuration(3200);
+    // Use requestAnimationFrame to ensure modal is rendered before spin starts
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setRotation(targetRotation);
+        setSpinning(true);
+      });
+    });
+    setTimeout(() => { setWinner(wheelBooks[winnerIndex] ?? null); setSpinning(false); }, 3400);
   };
 
   const addWinnerToLibrary = async () => {
@@ -240,7 +270,6 @@ const TbrWheel = () => {
       }
       await loadBooks(userId);
     } else if (userId) {
-      // Has userId but no book.id — queue for sync
       enqueueLibrarySync(userId, [updatedBook], "tbr_wheel_start_reading");
     }
     toast.success("Marked as Reading", {
@@ -256,64 +285,97 @@ const TbrWheel = () => {
   };
 
   const sliceColors = useMemo(() => generateSliceColors(wheelBooks.length), [wheelBooks.length]);
-  const cx = 130, cy = 130, r = 120;
-  const fsCx = 200, fsCy = 200, fsR = 190;
 
-  const renderWheel = (wcx: number, wcy: number, wr: number, large: boolean) => (
-    <div className="relative mx-auto mt-2" style={{ width: wcx * 2, height: wcy * 2 }}>
-      {/* Pointer */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1 z-10">
-        <div className={`w-0 h-0 border-l-transparent border-r-transparent border-t-primary ${large ? "border-l-[14px] border-r-[14px] border-t-[24px]" : "border-l-[10px] border-r-[10px] border-t-[18px]"}`} />
+  // Render the donut-style wheel with outward-radiating labels
+  const renderWheel = (wcx: number, wcy: number, wr: number, large: boolean) => {
+    const innerR = wr * 0.22; // donut hole
+    return (
+      <div className="relative mx-auto mt-2" style={{ width: wcx * 2, height: wcy * 2 }}>
+        {/* Pointer at top */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1 z-10">
+          <div className={`w-0 h-0 border-l-transparent border-r-transparent border-t-primary ${large ? "border-l-[14px] border-r-[14px] border-t-[24px]" : "border-l-[10px] border-r-[10px] border-t-[18px]"}`} />
+        </div>
+        <svg width={wcx * 2} height={wcy * 2} viewBox={`0 0 ${wcx * 2} ${wcy * 2}`}
+          style={{ transform: `rotate(${rotation}deg)`, transition: spinning ? `transform ${spinDuration}ms cubic-bezier(0.17, 0.67, 0.12, 0.99)` : 'none' }}>
+          {wheelBooks.map((book, i) => {
+            const anglePer = 360 / wheelBooks.length;
+            const startAngle = i * anglePer;
+            const endAngle = startAngle + anglePer;
+            const midAngle = startAngle + anglePer / 2;
+            const isWinner = !spinning && winner && winner.title === book.title;
+
+            // Label along the radius: start near inner edge, extend outward
+            // Text is placed at midpoint of slice angle, rotated to read from center outward
+            const labelR = innerR + (wr - innerR) * 0.15; // start just outside inner ring
+            const labelEnd = wr * 0.92; // end near outer edge
+            const availableLength = labelEnd - labelR;
+
+            // Estimate max chars based on available arc length and font size
+            const fontSize = large
+              ? (wheelBooks.length > 20 ? 9 : wheelBooks.length > 12 ? 11 : 13)
+              : (wheelBooks.length > 20 ? 6 : wheelBooks.length > 12 ? 8 : 10);
+            const charWidth = fontSize * 0.55;
+            const maxChars = Math.max(4, Math.floor(availableLength / charWidth));
+            const label = book.title.length > maxChars ? book.title.slice(0, maxChars - 1) + "…" : book.title;
+
+            // Place text at label start position, rotated so text reads outward along the radius
+            const textAngleCSS = midAngle; // rotation in SVG coordinate space
+
+            return (
+              <g key={`${book.title}-${i}`}>
+                <path
+                  d={describeArc(wcx, wcy, wr, innerR, startAngle, endAngle)}
+                  fill={sliceColors[i]}
+                  stroke="hsl(var(--background))"
+                  strokeWidth="1.5"
+                  opacity={isWinner ? 1 : 0.88}
+                />
+                {/* Radial label: text flows from center outward */}
+                <text
+                  x={wcx}
+                  y={wcy}
+                  textAnchor="start"
+                  dominantBaseline="central"
+                  fill="white"
+                  fontSize={fontSize}
+                  fontWeight="600"
+                  style={{ textShadow: '0 1px 3px rgba(0,0,0,0.6)' }}
+                  transform={`rotate(${textAngleCSS - 90}, ${wcx}, ${wcy}) translate(${labelR}, 0)`}
+                >
+                  {label}
+                </text>
+              </g>
+            );
+          })}
+          {/* Center hub circle */}
+          <circle cx={wcx} cy={wcy} r={innerR} fill="hsl(var(--background))" stroke="hsl(var(--border))" strokeWidth="2" />
+          <text x={wcx} y={wcy} textAnchor="middle" dominantBaseline="central" fill="hsl(var(--muted-foreground))" fontSize={large ? 12 : 9} fontWeight="700">
+            TBR
+          </text>
+        </svg>
       </div>
-      <svg width={wcx * 2} height={wcy * 2} viewBox={`0 0 ${wcx * 2} ${wcy * 2}`}
-        style={{ transform: `rotate(${rotation}deg)`, transition: `transform ${spinDuration}ms cubic-bezier(0.17, 0.67, 0.12, 0.99)` }}>
-        {wheelBooks.map((book, i) => {
-          const anglePer = 360 / wheelBooks.length;
-          const startAngle = i * anglePer;
-          const endAngle = startAngle + anglePer;
-          const midAngle = startAngle + anglePer / 2;
-          // Label starts near center (30% radius) and extends outward
-          const labelStartR = wr * 0.22;
-          const labelPos = polarToCartesian(wcx, wcy, labelStartR, midAngle);
-          const maxChars = large
-            ? Math.max(10, Math.floor(anglePer / 1.8))
-            : Math.max(6, Math.floor(anglePer / 3));
-          const label = book.title.length > maxChars ? book.title.slice(0, maxChars - 1) + "…" : book.title;
-          const isWinner = !spinning && winner && winner.title === book.title;
-          const fontSize = large
-            ? (wheelBooks.length > 15 ? 9 : wheelBooks.length > 8 ? 12 : 14)
-            : (wheelBooks.length > 15 ? 7 : wheelBooks.length > 8 ? 9 : 11);
-          return (
-            <g key={`${book.title}-${i}`}>
-              <path d={describeArc(wcx, wcy, wr, startAngle, endAngle)} fill={sliceColors[i]} stroke="hsl(var(--background))" strokeWidth="1.5"
-                opacity={isWinner ? 1 : 0.85} />
-              <text x={labelPos.x} y={labelPos.y} textAnchor="start" dominantBaseline="central"
-                fill="white" fontSize={fontSize}
-                fontWeight="600" transform={`rotate(${midAngle}, ${labelPos.x}, ${labelPos.y})`}>
-                {label}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
+    );
+  };
+
+  const cx = 150, cy = 150, r = 140;
+  const fsCx = 220, fsCy = 220, fsR = 210;
 
   return (
     <>
-    {/* Full-screen spin modal */}
+    {/* Full-screen spin overlay */}
     {fullScreenSpin && (
-      <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-md flex flex-col items-center justify-center">
+      <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-md flex flex-col items-center justify-center p-4">
         <Button variant="ghost" size="icon" className="absolute top-4 right-4" onClick={() => setFullScreenSpin(false)}>
           <X className="w-6 h-6" />
         </Button>
         <h2 className="font-display text-2xl font-bold mb-4">Spin your TBR</h2>
         {renderWheel(fsCx, fsCy, fsR, true)}
+        {/* Only show result AFTER spin animation ends */}
         {winner && !spinning && (
-          <div className="mt-6 text-center">
+          <div className="mt-6 text-center animate-in fade-in-0 zoom-in-95 duration-300">
             <h3 className="font-display text-xl font-bold">{winner.title}</h3>
             <p className="text-sm text-muted-foreground">{winner.author}</p>
-            <div className="mt-3 flex gap-2 justify-center">
+            <div className="mt-3 flex gap-2 justify-center flex-wrap">
               {appliedFilters.ownership === "library" ? (
                 <Button size="sm" onClick={startReading}>Start Reading</Button>
               ) : (
@@ -323,6 +385,9 @@ const TbrWheel = () => {
               <Button size="sm" variant="ghost" onClick={() => setFullScreenSpin(false)}>Close</Button>
             </div>
           </div>
+        )}
+        {spinning && (
+          <p className="mt-6 text-sm text-muted-foreground animate-pulse">Spinning...</p>
         )}
       </div>
     )}
@@ -337,16 +402,32 @@ const TbrWheel = () => {
         <section className="rounded-xl border border-border/60 bg-card/70 p-6">
           <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Filters</div>
           <div className="mt-4 grid gap-4">
-            {/* Genre dropdown */}
+            {/* Multi-genre selection with checkboxes */}
             <div className="grid gap-2">
-              <label className="text-sm font-medium">Genre</label>
-              <Select value={selectedGenre} onValueChange={setSelectedGenre}>
-                <SelectTrigger><SelectValue placeholder="Select genre" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="All Genres">All Genres</SelectItem>
-                  {genreOptions.genres.map((g) => <SelectItem key={g} value={g}>{g}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <label className="text-sm font-medium">Genres</label>
+              <div className="rounded-lg border border-border/60 bg-background/60 p-3 max-h-48 overflow-y-auto">
+                <label className="flex items-center gap-2 mb-2 cursor-pointer">
+                  <Checkbox
+                    checked={selectedGenres.length === 0}
+                    onCheckedChange={() => selectAllGenres()}
+                  />
+                  <span className="text-sm font-medium">All Genres</span>
+                </label>
+                <div className="border-t border-border/40 pt-2 grid gap-1.5">
+                  {genreOptions.genres.map((g) => (
+                    <label key={g} className="flex items-center gap-2 cursor-pointer">
+                      <Checkbox
+                        checked={selectedGenres.includes(g)}
+                        onCheckedChange={() => toggleGenre(g)}
+                      />
+                      <span className="text-sm">{g}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              {selectedGenres.length > 0 && (
+                <p className="text-xs text-muted-foreground">{selectedGenres.length} genre{selectedGenres.length > 1 ? "s" : ""} selected</p>
+              )}
               {!genreOptions.isUserGenres && (
                 <p className="text-xs text-muted-foreground/70 italic">These are starter genres. Import your library to see your personal genres.</p>
               )}
@@ -392,7 +473,12 @@ const TbrWheel = () => {
             )}
 
             <Button onClick={() => void applyFilters()} disabled={loadingExternal}>{loadingExternal ? "Loading candidates..." : "Apply filters"}</Button>
-            <div className="text-sm text-muted-foreground">Matching books: {filtered.length}</div>
+            <div className="text-sm text-muted-foreground">
+              Matching books: <strong>{filtered.length}</strong>
+              {wheelBooks.length > 0 && wheelBooks.length < filtered.length && (
+                <span className="ml-1">({wheelBooks.length} on wheel)</span>
+              )}
+            </div>
           </div>
         </section>
 
@@ -431,7 +517,7 @@ const TbrWheel = () => {
                 </CardContent>
               </Card>
 
-              {winner && (
+              {winner && !fullScreenSpin && (
                 <Card className="border-border/60 bg-card/80">
                   <CardContent className="p-6">
                     <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Winner</div>
@@ -463,7 +549,6 @@ const TbrWheel = () => {
         </section>
       </div>
     </main>
-  );
     </>
   );
 };

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookMarked, BookOpen, Search, Star } from "lucide-react";
+import { BookMarked, BookOpen, Search, Star, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -48,13 +48,37 @@ type LibraryBook = {
 
 const db = supabase as any;
 
+/** Canonical status normalizer — single source of truth */
+export const normalizeStatus = (raw: string | null | undefined): string => {
+  if (!raw) return "tbr";
+  const s = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["tbr", "to_read", "want_to_read"].includes(s)) return "tbr";
+  if (["reading", "currently_reading"].includes(s)) return "reading";
+  if (["read", "finished"].includes(s)) return "finished";
+  if (s === "paused") return "paused";
+  return s;
+};
+
+/** Classify sync error for user-facing label */
+const classifySyncError = (error: any): string => {
+  if (!navigator.onLine) return "Offline";
+  const msg = (error?.message || error || "").toString().toLowerCase();
+  if (msg.includes("401") || msg.includes("403") || msg.includes("jwt") || msg.includes("auth") || msg.includes("token"))
+    return "Signed out";
+  if (msg.includes("rls") || msg.includes("permission") || msg.includes("policy"))
+    return "Permission denied";
+  if (msg.includes("5") && msg.match(/5\d\d/))
+    return "Service error";
+  return "Service error";
+};
+
 const Library = () => {
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
   const [genre, setGenre] = useState("");
   const [seriesName, setSeriesName] = useState("");
   const [isFirstInSeries, setIsFirstInSeries] = useState(false);
-  const [status, setStatus] = useState("want_to_read");
+  const [status, setStatus] = useState("tbr");
   const [books, setBooks] = useState<LibraryBook[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -63,7 +87,7 @@ const Library = () => {
   const [editGenre, setEditGenre] = useState("");
   const [editSeriesName, setEditSeriesName] = useState("");
   const [editIsFirstInSeries, setEditIsFirstInSeries] = useState(false);
-  const [editStatus, setEditStatus] = useState("want_to_read");
+  const [editStatus, setEditStatus] = useState("tbr");
   const [userId, setUserId] = useState<string | null>(null);
   const [userLabel, setUserLabel] = useState<string | null>(null);
   const [loadingBooks, setLoadingBooks] = useState(false);
@@ -87,6 +111,7 @@ const Library = () => {
   const [cloudNotice, setCloudNotice] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("title_az");
+  const [failedCovers, setFailedCovers] = useState<Set<string>>(new Set());
 
   const getLocalBooks = () => {
     const stored = localStorage.getItem("reading-copilot-library");
@@ -116,7 +141,8 @@ const Library = () => {
       .limit(6);
     setLoadingLogs(false);
     if (error) {
-      setCloudNotice("Cloud sync is unavailable — using local-only data for now.");
+      // import_logs table may not exist — don't show sync banner for this
+      if (import.meta.env.DEV) console.warn("[ShelfGuide] loadImportLogs error (non-critical):", error.message);
       return;
     }
     setImportLogs(data || []);
@@ -165,10 +191,13 @@ const Library = () => {
     setLoadingBooks(false);
 
     if (error) {
-      setCloudNotice("Cloud sync is unavailable — using local-only data for now.");
+      const reason = classifySyncError(error);
+      if (import.meta.env.DEV) console.warn("[ShelfGuide] loadBooks failed:", { reason, error: error.message, timestamp: new Date().toISOString() });
+      setCloudNotice(`Cloud sync is unavailable — ${reason.toLowerCase()}. Using local-only data for now.`);
       setBooks(getLocalBooks());
       return;
     }
+    // Cloud succeeded — clear any previous notice
     setCloudNotice(null);
 
     const cloudBooks = (data || []) as LibraryBook[];
@@ -192,23 +221,32 @@ const Library = () => {
     }
   }, []);
 
-  // Cover enrichment effect
+  // Cover enrichment effect — reset when book count changes to allow re-enrichment after import
   const enrichRunRef = useRef(false);
+  const lastBookCountRef = useRef(0);
   useEffect(() => {
+    // Reset enrichment flag when books array changes size (e.g. after import)
+    if (books.length !== lastBookCountRef.current) {
+      enrichRunRef.current = false;
+      lastBookCountRef.current = books.length;
+    }
     if (books.length === 0 || enrichRunRef.current) return;
     const needsCovers = books.some((b) => !b.thumbnail);
     if (!needsCovers) return;
     enrichRunRef.current = true;
+    if (import.meta.env.DEV) console.log("[ShelfGuide] Starting cover enrichment for", books.filter(b => !b.thumbnail).length, "books without covers");
     enrichCovers(books, (index, coverUrl) => {
       setBooks((prev) => {
         const next = [...prev];
         if (next[index]) next[index] = { ...next[index], thumbnail: coverUrl };
         return next;
       });
-      // Sync cover to cloud if signed in
+      // Sync cover to cloud if signed in — never overwrite existing cover with null
       const book = books[index];
-      if (userId && book) {
-        upsertBooksToCloud(userId, [{ ...book, thumbnail: coverUrl }]).catch(() => {});
+      if (userId && book && coverUrl) {
+        upsertBooksToCloud(userId, [{ ...book, thumbnail: coverUrl }]).catch((err) => {
+          if (import.meta.env.DEV) console.warn("[ShelfGuide] Cover sync to cloud failed:", err);
+        });
       }
     });
   }, [books, userId]);
@@ -244,17 +282,6 @@ const Library = () => {
       listener.subscription.unsubscribe();
     };
   }, [loadBooks, loadImportLogs]);
-
-  // Canonical status normalizer -- single source of truth for status mapping
-  const normalizeStatus = (raw: string | null | undefined): string => {
-    if (!raw) return "want_to_read";
-    const s = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
-    if (["tbr", "to_read", "want_to_read"].includes(s)) return "tbr";
-    if (["reading", "currently_reading"].includes(s)) return "reading";
-    if (["read", "finished"].includes(s)) return "finished";
-    if (s === "paused") return "paused";
-    return s;
-  };
 
   // Library stats (using normalized statuses)
   const stats = useMemo(() => {
@@ -314,7 +341,7 @@ const Library = () => {
     setEditGenre(book.genre);
     setEditSeriesName(book.series_name ?? "");
     setEditIsFirstInSeries(book.is_first_in_series);
-    setEditStatus(book.status || "want_to_read");
+    setEditStatus(book.status || "tbr");
   };
 
   const saveEdits = () => {
@@ -392,7 +419,7 @@ const Library = () => {
     if (normalized === "to-read") return "tbr";
     if (normalized === "currently-reading") return "reading";
     if (normalized === "read") return "finished";
-    return "want_to_read";
+    return "tbr";
   };
 
   const parseCsv = (text: string) => {
@@ -476,7 +503,7 @@ const Library = () => {
         is_first_in_series: ["true", "yes", "1"].includes(
           (record.is_first_in_series || "").toLowerCase()
         ),
-        status: record.status || "want_to_read",
+        status: record.status || "tbr",
       });
     });
 
@@ -547,7 +574,7 @@ const Library = () => {
           return null;
         }
         const shelf = record.exclusive_shelf || record.shelf || "";
-        const bookStatus = shelf ? mapShelfToStatus(shelf) : "want_to_read";
+        const bookStatus = shelf ? mapShelfToStatus(shelf) : "tbr";
         const isbn = stripGoodreadsIsbn(record.isbn || "");
         const isbn13 = stripGoodreadsIsbn(record.isbn13 || "");
         const rawRating = record.my_rating ? Number(record.my_rating) : null;
@@ -651,6 +678,7 @@ const Library = () => {
         date_read: current.date_read || book.date_read || null,
         description: current.description || book.description || null,
         page_count: current.page_count ?? book.page_count ?? null,
+        // Never overwrite existing cover with null
         thumbnail: current.thumbnail || book.thumbnail || null,
         genre: current.genre || book.genre,
       };
@@ -696,9 +724,36 @@ const Library = () => {
     );
   };
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    toast.success("Signed out. Using local library.");
+  /** Retry cover for a specific book */
+  const retryCover = (book: LibraryBook, bookIndex: number) => {
+    // Clear from failed set
+    setFailedCovers((prev) => {
+      const next = new Set(prev);
+      next.delete(book.title + "|" + book.author);
+      return next;
+    });
+    // Clear from localStorage cache
+    const CACHE_KEY = "shelfguide-cover-cache";
+    try {
+      const cache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
+      const key = `${book.title.trim().toLowerCase()}|${book.author.trim().toLowerCase()}`;
+      delete cache[key];
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    } catch { /* ignore */ }
+    // Re-run enrichment for this single book
+    enrichCovers([book], (_, coverUrl) => {
+      setBooks((prev) => {
+        const realIdx = prev.indexOf(book);
+        if (realIdx < 0) return prev;
+        const next = [...prev];
+        next[realIdx] = { ...next[realIdx], thumbnail: coverUrl };
+        return next;
+      });
+      if (userId && coverUrl) {
+        upsertBooksToCloud(userId, [{ ...book, thumbnail: coverUrl }]).catch(() => {});
+      }
+      toast.success(`Cover found for "${book.title}"`);
+    });
   };
 
   const renderStars = (rating: number) => {
@@ -712,6 +767,14 @@ const Library = () => {
         ))}
       </div>
     );
+  };
+
+  /** Manual retry for cloud sync */
+  const retryCloudSync = async () => {
+    if (!userId) return;
+    if (import.meta.env.DEV) console.log("[ShelfGuide] Manual cloud sync retry triggered");
+    await loadBooks(userId);
+    await flushAllPendingSync();
   };
 
   return (
@@ -744,12 +807,10 @@ const Library = () => {
               }
             }}
           />
+          {/* Removed duplicate sign-out — sign out lives in the navbar only */}
           {userLabel && (
             <div className="flex items-center gap-3 text-xs text-muted-foreground font-body">
               <span>Signed in as {userLabel}</span>
-              <Button variant="ghost" size="sm" onClick={handleSignOut}>
-                Sign out
-              </Button>
             </div>
           )}
           <Dialog>
@@ -795,7 +856,6 @@ const Library = () => {
                     <Select value={status} onValueChange={setStatus}>
                       <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="want_to_read">Want to read</SelectItem>
                         <SelectItem value="tbr">TBR</SelectItem>
                         <SelectItem value="reading">Reading</SelectItem>
                         <SelectItem value="finished">Finished</SelectItem>
@@ -818,8 +878,11 @@ const Library = () => {
       </div>
 
       {cloudNotice && (
-        <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground">
-          {cloudNotice}
+        <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground flex items-center justify-between gap-2">
+          <span>{cloudNotice}</span>
+          <Button variant="outline" size="sm" className="h-7 text-xs px-2 shrink-0" onClick={() => void retryCloudSync()}>
+            Retry
+          </Button>
         </div>
       )}
 
@@ -830,7 +893,7 @@ const Library = () => {
           <span className="text-muted-foreground">|</span>
           <span><strong>{stats.tbr}</strong> TBR</span>
           <span className="text-muted-foreground">|</span>
-          <span><strong>{stats.read}</strong> Read</span>
+          <span><strong>{stats.read}</strong> Finished</span>
           <span className="text-muted-foreground">|</span>
           <span><strong>{stats.authors}</strong> authors</span>
         </div>
@@ -985,52 +1048,66 @@ const Library = () => {
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {displayedBooks.map((book, index) => (
-            <div
-              key={`${book.title}-${book.id || index}`}
-              className="rounded-xl border border-border/60 bg-card/70 p-4 shadow-sm"
-            >
-              <div className="flex gap-3">
-                {/* Cover image */}
-                <div className="flex-shrink-0 w-16 aspect-[2/3] rounded-md overflow-hidden bg-secondary/40 flex items-center justify-center">
-                  {book.thumbnail ? (
-                    <img
-                      src={book.thumbnail}
-                      alt={book.title}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        if (import.meta.env.DEV) console.warn(`[ShelfGuide] Cover load failed: "${book.title}" url=${book.thumbnail}`);
-                        (e.target as HTMLImageElement).style.display = "none";
-                        (e.target as HTMLImageElement).parentElement?.classList.add("cover-failed");
-                      }}
-                    />
-                  ) : (
-                    <BookOpen className="w-6 h-6 text-muted-foreground/40" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">
-                      {normalizeStatus(book.status).replace(/_/g, " ")}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Button variant="outline" size="sm" onClick={() => startEditing(index)}>Edit</Button>
-                      <Button variant="ghost" size="sm" onClick={() => deleteBook(index)}>Delete</Button>
-                    </div>
+          {displayedBooks.map((book, index) => {
+            const coverKey = book.title + "|" + book.author;
+            const coverFailed = failedCovers.has(coverKey);
+            return (
+              <div
+                key={`${book.title}-${book.id || index}`}
+                className="rounded-xl border border-border/60 bg-card/70 p-4 shadow-sm"
+              >
+                <div className="flex gap-3">
+                  {/* Cover image with robust fallback */}
+                  <div className="flex-shrink-0 w-16 aspect-[2/3] rounded-md overflow-hidden bg-secondary/40 flex items-center justify-center relative">
+                    {book.thumbnail && !coverFailed ? (
+                      <img
+                        src={book.thumbnail}
+                        alt={book.title}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          if (import.meta.env.DEV) console.warn(`[ShelfGuide] Cover load failed: "${book.title}" url=${book.thumbnail}`);
+                          setFailedCovers((prev) => new Set(prev).add(coverKey));
+                        }}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center gap-1">
+                        <BookOpen className="w-5 h-5 text-muted-foreground/40" />
+                        {(coverFailed || !book.thumbnail) && (
+                          <button
+                            onClick={() => retryCover(book, index)}
+                            className="text-[9px] text-primary/70 hover:text-primary flex items-center gap-0.5"
+                            title="Retry cover fetch"
+                          >
+                            <RefreshCw className="w-2.5 h-2.5" /> retry
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <h3 className="font-display text-lg font-bold mt-1 truncate">{book.title}</h3>
-                  <p className="text-sm text-muted-foreground font-body truncate">{book.author}</p>
-                  {book.rating && book.rating > 0 && (
-                    <div className="mt-1">{renderStars(book.rating)}</div>
-                  )}
-                  <div className="text-xs text-muted-foreground font-body mt-2 flex flex-wrap gap-1">
-                    {book.genre && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.genre}</span>}
-                    {book.series_name && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.series_name}</span>}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">
+                        {normalizeStatus(book.status).replace(/_/g, " ")}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button variant="outline" size="sm" onClick={() => startEditing(index)}>Edit</Button>
+                        <Button variant="ghost" size="sm" onClick={() => deleteBook(index)}>Delete</Button>
+                      </div>
+                    </div>
+                    <h3 className="font-display text-lg font-bold mt-1 truncate">{book.title}</h3>
+                    <p className="text-sm text-muted-foreground font-body truncate">{book.author}</p>
+                    {book.rating && book.rating > 0 && (
+                      <div className="mt-1">{renderStars(book.rating)}</div>
+                    )}
+                    <div className="text-xs text-muted-foreground font-body mt-2 flex flex-wrap gap-1">
+                      {book.genre && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.genre}</span>}
+                      {book.series_name && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.series_name}</span>}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1069,7 +1146,6 @@ const Library = () => {
                 <Select value={editStatus} onValueChange={setEditStatus}>
                   <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="want_to_read">Want to read</SelectItem>
                     <SelectItem value="tbr">TBR</SelectItem>
                     <SelectItem value="reading">Reading</SelectItem>
                     <SelectItem value="finished">Finished</SelectItem>
