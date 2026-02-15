@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Sparkles, RotateCw, BookOpen } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Sparkles, RotateCw, BookOpen, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -109,7 +110,9 @@ const describeArc = (cx: number, cy: number, r: number, startAngle: number, endA
 };
 
 const TbrWheel = () => {
+  const navigate = useNavigate();
   const [books, setBooks] = useState<LibraryBook[]>([]);
+  const [fullScreenSpin, setFullScreenSpin] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [filters, setFilters] = useState<TbrFilters>(defaultFilters);
   const [appliedFilters, setAppliedFilters] = useState<TbrFilters>(defaultFilters);
@@ -200,6 +203,7 @@ const TbrWheel = () => {
 
   const spin = () => {
     if (wheelBooks.length === 0 || spinning) return;
+    setFullScreenSpin(true);
     const winnerIndex = pickWinnerIndex(wheelBooks.length);
     const anglePer = 360 / wheelBooks.length;
     const turns = 3;
@@ -224,13 +228,24 @@ const TbrWheel = () => {
 
   const startReading = async () => {
     if (!winner) return;
+    const updatedBook = { ...winner, status: "reading" };
+    // Optimistic local update
+    const next = books.map((b) => b.title === winner.title && b.author === winner.author ? { ...b, status: "reading" } : b);
+    setBooks(next); setLocalBooks(next);
     if (userId && winner.id) {
       const { error } = await db.from("books").update({ status: "reading" }).eq("id", winner.id);
-      if (error) { toast.error("Could not update status."); return; }
-      await loadBooks(userId); toast.success("Marked as reading."); return;
+      if (error) {
+        if (import.meta.env.DEV) console.warn("[ShelfGuide] startReading cloud update failed, queuing:", error.message);
+        enqueueLibrarySync(userId, [updatedBook], "tbr_wheel_start_reading");
+      }
+      await loadBooks(userId);
+    } else if (userId) {
+      // Has userId but no book.id — queue for sync
+      enqueueLibrarySync(userId, [updatedBook], "tbr_wheel_start_reading");
     }
-    const next = books.map((b) => b.title === winner.title && b.author === winner.author ? { ...b, status: "reading" } : b);
-    setBooks(next); setLocalBooks(next); toast.success("Marked as reading.");
+    toast.success("Marked as Reading", {
+      action: { label: "View in Library", onClick: () => navigate("/library") },
+    });
   };
 
   const saveToHistory = async () => {
@@ -242,8 +257,75 @@ const TbrWheel = () => {
 
   const sliceColors = useMemo(() => generateSliceColors(wheelBooks.length), [wheelBooks.length]);
   const cx = 130, cy = 130, r = 120;
+  const fsCx = 200, fsCy = 200, fsR = 190;
+
+  const renderWheel = (wcx: number, wcy: number, wr: number, large: boolean) => (
+    <div className="relative mx-auto mt-2" style={{ width: wcx * 2, height: wcy * 2 }}>
+      {/* Pointer */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1 z-10">
+        <div className={`w-0 h-0 border-l-transparent border-r-transparent border-t-primary ${large ? "border-l-[14px] border-r-[14px] border-t-[24px]" : "border-l-[10px] border-r-[10px] border-t-[18px]"}`} />
+      </div>
+      <svg width={wcx * 2} height={wcy * 2} viewBox={`0 0 ${wcx * 2} ${wcy * 2}`}
+        style={{ transform: `rotate(${rotation}deg)`, transition: `transform ${spinDuration}ms cubic-bezier(0.17, 0.67, 0.12, 0.99)` }}>
+        {wheelBooks.map((book, i) => {
+          const anglePer = 360 / wheelBooks.length;
+          const startAngle = i * anglePer;
+          const endAngle = startAngle + anglePer;
+          const midAngle = startAngle + anglePer / 2;
+          // Label starts near center (30% radius) and extends outward
+          const labelStartR = wr * 0.22;
+          const labelPos = polarToCartesian(wcx, wcy, labelStartR, midAngle);
+          const maxChars = large
+            ? Math.max(10, Math.floor(anglePer / 1.8))
+            : Math.max(6, Math.floor(anglePer / 3));
+          const label = book.title.length > maxChars ? book.title.slice(0, maxChars - 1) + "…" : book.title;
+          const isWinner = !spinning && winner && winner.title === book.title;
+          const fontSize = large
+            ? (wheelBooks.length > 15 ? 9 : wheelBooks.length > 8 ? 12 : 14)
+            : (wheelBooks.length > 15 ? 7 : wheelBooks.length > 8 ? 9 : 11);
+          return (
+            <g key={`${book.title}-${i}`}>
+              <path d={describeArc(wcx, wcy, wr, startAngle, endAngle)} fill={sliceColors[i]} stroke="hsl(var(--background))" strokeWidth="1.5"
+                opacity={isWinner ? 1 : 0.85} />
+              <text x={labelPos.x} y={labelPos.y} textAnchor="start" dominantBaseline="central"
+                fill="white" fontSize={fontSize}
+                fontWeight="600" transform={`rotate(${midAngle}, ${labelPos.x}, ${labelPos.y})`}>
+                {label}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
 
   return (
+    <>
+    {/* Full-screen spin modal */}
+    {fullScreenSpin && (
+      <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-md flex flex-col items-center justify-center">
+        <Button variant="ghost" size="icon" className="absolute top-4 right-4" onClick={() => setFullScreenSpin(false)}>
+          <X className="w-6 h-6" />
+        </Button>
+        <h2 className="font-display text-2xl font-bold mb-4">Spin your TBR</h2>
+        {renderWheel(fsCx, fsCy, fsR, true)}
+        {winner && !spinning && (
+          <div className="mt-6 text-center">
+            <h3 className="font-display text-xl font-bold">{winner.title}</h3>
+            <p className="text-sm text-muted-foreground">{winner.author}</p>
+            <div className="mt-3 flex gap-2 justify-center">
+              {appliedFilters.ownership === "library" ? (
+                <Button size="sm" onClick={startReading}>Start Reading</Button>
+              ) : (
+                <Button size="sm" onClick={addWinnerToLibrary}>Add to Library (TBR)</Button>
+              )}
+              <Button size="sm" variant="outline" onClick={() => { setWinner(null); spin(); }}>Spin again</Button>
+              <Button size="sm" variant="ghost" onClick={() => setFullScreenSpin(false)}>Close</Button>
+            </div>
+          </div>
+        )}
+      </div>
+    )}
     <main className="container mx-auto px-4 pt-24 pb-16">
       <div className="mb-8">
         <h1 className="font-display text-4xl font-bold">TBR Wheel</h1>
@@ -337,38 +419,8 @@ const TbrWheel = () => {
                     <Button onClick={spin} disabled={spinning || wheelBooks.length === 0}><RotateCw className="w-4 h-4 mr-2" />{spinning ? "Spinning..." : "Spin"}</Button>
                   </div>
 
-                  {/* SVG Wheel */}
-                  <div className="relative mx-auto mt-2" style={{ width: cx * 2, height: cy * 2 }}>
-                    {/* Pointer */}
-                    <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1 z-10">
-                      <div className="w-0 h-0 border-l-[10px] border-r-[10px] border-t-[18px] border-l-transparent border-r-transparent border-t-primary" />
-                    </div>
-                    <svg width={cx * 2} height={cy * 2} viewBox={`0 0 ${cx * 2} ${cy * 2}`}
-                      style={{ transform: `rotate(${rotation}deg)`, transition: `transform ${spinDuration}ms cubic-bezier(0.17, 0.67, 0.12, 0.99)` }}>
-                      {wheelBooks.map((book, i) => {
-                        const anglePer = 360 / wheelBooks.length;
-                        const startAngle = i * anglePer;
-                        const endAngle = startAngle + anglePer;
-                        const midAngle = startAngle + anglePer / 2;
-                        const labelR = r * 0.65;
-                        const labelPos = polarToCartesian(cx, cy, labelR, midAngle);
-                        const maxChars = Math.max(6, Math.floor(anglePer / 3));
-                        const label = book.title.length > maxChars ? book.title.slice(0, maxChars - 1) + "…" : book.title;
-                        const isWinner = !spinning && winner && winner.title === book.title;
-                        return (
-                          <g key={`${book.title}-${i}`}>
-                            <path d={describeArc(cx, cy, r, startAngle, endAngle)} fill={sliceColors[i]} stroke="hsl(var(--background))" strokeWidth="1.5"
-                              opacity={isWinner ? 1 : 0.85} />
-                            <text x={labelPos.x} y={labelPos.y} textAnchor="middle" dominantBaseline="central"
-                              fill="white" fontSize={wheelBooks.length > 15 ? 7 : wheelBooks.length > 8 ? 9 : 11}
-                              fontWeight="600" transform={`rotate(${midAngle}, ${labelPos.x}, ${labelPos.y})`}>
-                              {label}
-                            </text>
-                          </g>
-                        );
-                      })}
-                    </svg>
-                  </div>
+                  {/* Inline SVG Wheel (small preview) */}
+                  {renderWheel(cx, cy, r, false)}
 
                   {filtered.length > WHEEL_MAX && (
                     <div className="mt-3 flex items-center justify-between gap-3">
@@ -411,6 +463,8 @@ const TbrWheel = () => {
         </section>
       </div>
     </main>
+  );
+    </>
   );
 };
 

@@ -245,11 +245,28 @@ const Library = () => {
     };
   }, [loadBooks, loadImportLogs]);
 
-  // Library stats
+  // Canonical status normalizer -- single source of truth for status mapping
+  const normalizeStatus = (raw: string | null | undefined): string => {
+    if (!raw) return "want_to_read";
+    const s = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (["tbr", "to_read", "want_to_read"].includes(s)) return "tbr";
+    if (["reading", "currently_reading"].includes(s)) return "reading";
+    if (["read", "finished"].includes(s)) return "finished";
+    if (s === "paused") return "paused";
+    return s;
+  };
+
+  // Library stats (using normalized statuses)
   const stats = useMemo(() => {
     const total = books.length;
-    const tbr = books.filter((b) => b.status === "tbr" || b.status === "want_to_read").length;
-    const read = books.filter((b) => b.status === "finished" || b.status === "read").length;
+    const statusDist: Record<string, number> = {};
+    books.forEach((b) => {
+      const ns = normalizeStatus(b.status);
+      statusDist[ns] = (statusDist[ns] ?? 0) + 1;
+    });
+    if (import.meta.env.DEV) console.log("[ShelfGuide] Library status distribution:", statusDist);
+    const tbr = statusDist["tbr"] ?? 0;
+    const read = statusDist["finished"] ?? 0;
     const authors = new Set(books.map((b) => b.author.trim().toLowerCase())).size;
     return { total, tbr, read, authors };
   }, [books]);
@@ -977,7 +994,16 @@ const Library = () => {
                 {/* Cover image */}
                 <div className="flex-shrink-0 w-16 aspect-[2/3] rounded-md overflow-hidden bg-secondary/40 flex items-center justify-center">
                   {book.thumbnail ? (
-                    <img src={book.thumbnail} alt={book.title} className="w-full h-full object-cover" />
+                    <img
+                      src={book.thumbnail}
+                      alt={book.title}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        if (import.meta.env.DEV) console.warn(`[ShelfGuide] Cover load failed: "${book.title}" url=${book.thumbnail}`);
+                        (e.target as HTMLImageElement).style.display = "none";
+                        (e.target as HTMLImageElement).parentElement?.classList.add("cover-failed");
+                      }}
+                    />
                   ) : (
                     <BookOpen className="w-6 h-6 text-muted-foreground/40" />
                   )}
@@ -985,7 +1011,7 @@ const Library = () => {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-2">
                     <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">
-                      {book.status.replace(/_/g, " ")}
+                      {normalizeStatus(book.status).replace(/_/g, " ")}
                     </div>
                     <div className="flex items-center gap-1">
                       <Button variant="outline" size="sm" onClick={() => startEditing(index)}>Edit</Button>

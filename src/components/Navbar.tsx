@@ -20,7 +20,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 const navLinks = [
-  { path: "/", label: "Home" },
+  { path: "/", label: "How it Works" },
   { path: "/library", label: "My Library" },
   { path: "/tbr-wheel", label: "TBR Wheel" },
   { path: "/copilot", label: "Copilot" },
@@ -38,7 +38,6 @@ const Navbar = () => {
   const [authUsername, setAuthUsername] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const { theme, setTheme } = useTheme();
-  const googleOAuthEnabled = import.meta.env.VITE_ENABLE_GOOGLE_OAUTH === "true";
 
   useEffect(() => {
     const init = async () => {
@@ -91,21 +90,6 @@ const Navbar = () => {
     }
     toast.success("Signed in.");
     setAuthOpen(false);
-  };
-
-  const handleSocialAuth = async (provider: "google" | "apple") => {
-    if (provider === "google" && !googleOAuthEnabled) {
-      toast.message("Google sign-in is coming soon. Use email/password for now.");
-      return;
-    }
-    const redirectTo = window.location.origin;
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: { redirectTo },
-    });
-    if (error) {
-      toast.error(error.message);
-    }
   };
 
   const handleHeaderAuthClick = async () => {
@@ -223,26 +207,6 @@ const Navbar = () => {
             </div>
 
             <div className="px-8 py-6 grid gap-4">
-              <div className="grid gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => handleSocialAuth("google")}
-                  disabled={!googleOAuthEnabled}
-                  title={!googleOAuthEnabled ? "Coming soon. Use email/password for now." : undefined}
-                >
-                  Continue with Google
-                </Button>
-                <Button variant="outline" onClick={() => handleSocialAuth("apple")}>
-                  Continue with Apple
-                </Button>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <span className="h-px flex-1 bg-border" />
-                <span className="text-xs text-muted-foreground">or</span>
-                <span className="h-px flex-1 bg-border" />
-              </div>
-
               <div className="flex items-center gap-2">
                 <Button
                   variant={authMode === "sign_up" ? "default" : "outline"}
