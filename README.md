@@ -85,6 +85,18 @@ VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_PUBLISHABLE_KEY=your_anon_key
 ```
 
+Password recovery uses a dedicated reset route:
+
+- App route: `/reset-password`
+- Supabase email redirect target: `https://<your-app-origin>/reset-password`
+
+Supabase Dashboard -> Authentication -> URL Configuration:
+
+- Add each environment reset URL to **Redirect URLs**, for example:
+- `https://shelfguide.lovable.app/reset-password`
+- `http://localhost:4173/reset-password`
+- `http://127.0.0.1:4173/reset-password`
+
 Create the `books` table and enable RLS:
 
 ```sql

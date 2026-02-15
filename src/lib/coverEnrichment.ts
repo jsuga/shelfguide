@@ -1,8 +1,16 @@
 const CACHE_KEY = "shelfguide-cover-cache";
-const MAX_CONCURRENT = 5;
+const MAX_CONCURRENT = 3;
+const REQUEST_GAP_MS = 140;
+const FAILED_TTL_MS = 1000 * 60 * 60 * 24;
 
 type CoverCacheEntry = { url: string | null; failedAt: string | null };
 type CoverCache = Record<string, CoverCacheEntry>;
+
+const inMemoryCache = new Map<string, CoverCacheEntry>();
+const inflightLookups = new Map<string, Promise<string | null>>();
+let lastRequestAt = 0;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const loadCache = (): CoverCache => {
   try {
@@ -16,12 +24,32 @@ const saveCache = (cache: CoverCache) => {
   localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
 };
 
-const cacheKey = (title: string, author: string) =>
-  `${title.trim().toLowerCase()}|${author.trim().toLowerCase()}`;
+const normalizeIsbn = (raw: string | null | undefined) => {
+  if (!raw) return "";
+  return raw.replace(/^="?|"$/g, "").replace(/[^0-9xX]/g, "").trim().toLowerCase();
+};
 
-const stripIsbn = (raw: string | null | undefined) => {
-  if (!raw) return null;
-  return raw.replace(/^="?|"$/g, "").trim() || null;
+export const buildCoverCacheKey = (book: { title: string; author: string; isbn?: string | null; isbn13?: string | null }) => {
+  const isbn13 = normalizeIsbn(book.isbn13);
+  if (isbn13) return `isbn13:${isbn13}`;
+  const isbn = normalizeIsbn(book.isbn);
+  if (isbn) return `isbn10:${isbn}`;
+  return `title_author:${book.title.trim().toLowerCase()}|${book.author.trim().toLowerCase()}`;
+};
+
+const hasFreshFailure = (entry: CoverCacheEntry | undefined) => {
+  if (!entry?.failedAt) return false;
+  const timestamp = new Date(entry.failedAt).getTime();
+  if (!Number.isFinite(timestamp)) return false;
+  return Date.now() - timestamp < FAILED_TTL_MS;
+};
+
+const rateLimitedFetch = async (url: string) => {
+  const now = Date.now();
+  const waitFor = Math.max(0, REQUEST_GAP_MS - (now - lastRequestAt));
+  if (waitFor > 0) await sleep(waitFor);
+  lastRequestAt = Date.now();
+  return fetch(url);
 };
 
 const fetchGoogleCover = async (query: string): Promise<string | null> => {
@@ -30,11 +58,12 @@ const fetchGoogleCover = async (query: string): Promise<string | null> => {
   url.searchParams.set("maxResults", "1");
   url.searchParams.set("printType", "books");
   try {
-    const res = await fetch(url.toString());
+    const res = await rateLimitedFetch(url.toString());
     if (!res.ok) return null;
     const data = await res.json();
     const item = data?.items?.[0]?.volumeInfo;
-    return item?.imageLinks?.thumbnail || item?.imageLinks?.smallThumbnail || null;
+    const image = item?.imageLinks?.thumbnail || item?.imageLinks?.smallThumbnail || null;
+    return typeof image === "string" ? image : null;
   } catch {
     return null;
   }
@@ -46,18 +75,37 @@ const lookupCover = async (book: {
   isbn?: string | null;
   isbn13?: string | null;
 }): Promise<string | null> => {
-  const isbn13 = stripIsbn(book.isbn13);
-  const isbn = stripIsbn(book.isbn);
+  const key = buildCoverCacheKey(book);
+  const pending = inflightLookups.get(key);
+  if (pending) return pending;
 
-  if (isbn13) {
-    const url = await fetchGoogleCover(`isbn:${isbn13}`);
-    if (url) return url;
+  const lookupPromise = (async () => {
+    const isbn13 = normalizeIsbn(book.isbn13);
+    const isbn = normalizeIsbn(book.isbn);
+
+    if (isbn13) {
+      const url = await fetchGoogleCover(`isbn:${isbn13}`);
+      if (url) return url;
+    }
+    if (isbn) {
+      const url = await fetchGoogleCover(`isbn:${isbn}`);
+      if (url) return url;
+    }
+    if (book.title.trim() && book.author.trim()) {
+      return fetchGoogleCover(`intitle:${book.title} inauthor:${book.author}`);
+    }
+    if (book.title.trim()) {
+      return fetchGoogleCover(`intitle:${book.title}`);
+    }
+    return null;
+  })();
+
+  inflightLookups.set(key, lookupPromise);
+  try {
+    return await lookupPromise;
+  } finally {
+    inflightLookups.delete(key);
   }
-  if (isbn) {
-    const url = await fetchGoogleCover(`isbn:${isbn}`);
-    if (url) return url;
-  }
-  return fetchGoogleCover(`intitle:${book.title} inauthor:${book.author}`);
 };
 
 export type EnrichableBook = {
@@ -66,66 +114,103 @@ export type EnrichableBook = {
   isbn?: string | null;
   isbn13?: string | null;
   thumbnail?: string | null;
+  cover_url?: string | null;
 };
 
 export const enrichCovers = async <T extends EnrichableBook>(
   books: T[],
   onUpdate: (index: number, coverUrl: string) => void
 ): Promise<void> => {
-  const cache = loadCache();
-  const toFetch: { index: number; book: T }[] = [];
+  const persistedCache = loadCache();
+  const toFetch: { index: number; key: string; book: T }[] = [];
 
-  for (let i = 0; i < books.length; i++) {
+  for (let i = 0; i < books.length; i += 1) {
     const book = books[i];
-    if (book.thumbnail) continue;
+    if (book.cover_url || book.thumbnail) continue;
 
-    const key = cacheKey(book.title, book.author);
-    const cached = cache[key];
+    const key = buildCoverCacheKey(book);
+    const memoized = inMemoryCache.get(key);
+    if (memoized) {
+      if (memoized.url) onUpdate(i, memoized.url);
+      continue;
+    }
+
+    const cached = persistedCache[key];
     if (cached) {
+      inMemoryCache.set(key, cached);
       if (cached.url) {
         onUpdate(i, cached.url);
       }
       continue;
     }
-    toFetch.push({ index: i, book });
+
+    toFetch.push({ index: i, key, book });
   }
 
   if (toFetch.length === 0) {
-    if (import.meta.env.DEV) console.log("[ShelfGuide] Cover enrichment: nothing to fetch (all cached or have covers).");
+    if (import.meta.env.DEV) {
+      console.log("[ShelfGuide] Cover enrichment: nothing to fetch (all cached or already persisted).");
+    }
     return;
   }
-  if (import.meta.env.DEV) console.log(`[ShelfGuide] Cover enrichment: fetching ${toFetch.length} covers...`);
+
+  if (import.meta.env.DEV) {
+    console.log(`[ShelfGuide] Cover enrichment: fetching ${toFetch.length} covers with throttling...`);
+  }
+
   let successCount = 0;
   let failCount = 0;
-
-  let running = 0;
   let cursor = 0;
 
-  const processNext = (): Promise<void> => {
-    if (cursor >= toFetch.length) return Promise.resolve();
-    const item = toFetch[cursor++];
-    running++;
+  const runWorker = async (): Promise<void> => {
+    while (cursor < toFetch.length) {
+      const current = toFetch[cursor];
+      cursor += 1;
 
-    return lookupCover(item.book).then((url) => {
-      const key = cacheKey(item.book.title, item.book.author);
-      if (url) {
-        cache[key] = { url, failedAt: null };
-        onUpdate(item.index, url);
-        successCount++;
-      } else {
-        cache[key] = { url: null, failedAt: new Date().toISOString() };
-        failCount++;
+      const existingFailure = persistedCache[current.key] || inMemoryCache.get(current.key);
+      if (hasFreshFailure(existingFailure)) {
+        continue;
       }
-      running--;
-      saveCache(cache);
-      return processNext();
-    });
+
+      const url = await lookupCover(current.book);
+      const entry: CoverCacheEntry = {
+        url,
+        failedAt: url ? null : new Date().toISOString(),
+      };
+      persistedCache[current.key] = entry;
+      inMemoryCache.set(current.key, entry);
+
+      if (url) {
+        onUpdate(current.index, url);
+        successCount += 1;
+      } else {
+        failCount += 1;
+      }
+
+      saveCache(persistedCache);
+    }
   };
 
   const workers = Array.from(
     { length: Math.min(MAX_CONCURRENT, toFetch.length) },
-    () => processNext()
+    () => runWorker()
   );
   await Promise.all(workers);
-  if (import.meta.env.DEV) console.log(`[ShelfGuide] Cover enrichment complete: ${successCount} found, ${failCount} failed.`);
+
+  if (import.meta.env.DEV) {
+    console.log(`[ShelfGuide] Cover enrichment complete: ${successCount} found, ${failCount} failed.`);
+  }
+};
+
+export const clearCoverCacheForBook = (book: {
+  title: string;
+  author: string;
+  isbn?: string | null;
+  isbn13?: string | null;
+}) => {
+  const key = buildCoverCacheKey(book);
+  inMemoryCache.delete(key);
+  const cache = loadCache();
+  delete cache[key];
+  saveCache(cache);
 };

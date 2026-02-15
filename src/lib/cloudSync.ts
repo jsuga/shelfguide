@@ -17,12 +17,16 @@ export type CloudBookUpsert = {
   status?: string | null;
   isbn?: string | null;
   isbn13?: string | null;
+  published_year?: number | null;
   rating?: number | null;
   date_read?: string | null;
   shelf?: string | null;
   description?: string | null;
   page_count?: number | null;
   thumbnail?: string | null;
+  cover_url?: string | null;
+  cover_source?: string | null;
+  cover_failed_at?: string | null;
   source?: string | null;
 };
 
@@ -280,18 +284,30 @@ export const getAuthenticatedUserId = async () => {
 
 export const upsertBooksToCloud = async (userId: string, books: CloudBookUpsert[]) => {
   if (!books.length) return { data: null, error: null };
+  const payload = books.map((book) => {
+    const coverUrl = (book.cover_url || book.thumbnail || "").trim() || null;
+    const next: Record<string, unknown> = {
+      ...book,
+      title: book.title.trim(),
+      author: book.author.trim(),
+      isbn: book.isbn?.trim() || null,
+      isbn13: book.isbn13?.trim() || null,
+      published_year:
+        typeof book.published_year === "number" && Number.isFinite(book.published_year)
+          ? book.published_year
+          : null,
+      cover_url: coverUrl,
+      thumbnail: coverUrl,
+      user_id: userId,
+    };
+    // Avoid clearing server-side values on partial updates.
+    if (next.cover_url === null) delete next.cover_url;
+    if (next.thumbnail === null) delete next.thumbnail;
+    return next;
+  });
   return (supabase as any)
     .from("books")
-    .upsert(
-      books.map((book) => ({
-        ...book,
-        title: book.title.trim(),
-        author: book.author.trim(),
-        isbn13: book.isbn13?.trim() || null,
-        user_id: userId,
-      })),
-      { onConflict: "user_id,dedupe_key", ignoreDuplicates: false }
-    );
+    .upsert(payload, { onConflict: "user_id,dedupe_key", ignoreDuplicates: false });
 };
 
 export const enqueueLibrarySync = (

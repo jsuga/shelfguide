@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { BookOpen, Menu, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,12 +30,14 @@ const navLinks = [
 
 const Navbar = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"sign_in" | "sign_up">("sign_up");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authUsername, setAuthUsername] = useState("");
+  const [resettingPassword, setResettingPassword] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const { theme, setTheme } = useTheme();
 
@@ -90,6 +92,25 @@ const Navbar = () => {
     }
     toast.success("Signed in.");
     setAuthOpen(false);
+    navigate("/library", { replace: false });
+  };
+
+  const handleForgotPassword = async () => {
+    if (!authEmail.trim()) {
+      toast.error("Enter your email first, then click Forgot password.");
+      return;
+    }
+    setResettingPassword(true);
+    const redirectTo = `${window.location.origin}/reset-password`;
+    const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), {
+      redirectTo,
+    });
+    setResettingPassword(false);
+    if (error) {
+      toast.error(`Could not send reset email: ${error.message}`);
+      return;
+    }
+    toast.success("Password reset email sent. Check your inbox.");
   };
 
   const handleHeaderAuthClick = async () => {
@@ -256,6 +277,16 @@ const Navbar = () => {
                   onChange={(event) => setAuthPassword(event.target.value)}
                   placeholder="At least 8 characters"
                 />
+                {authMode === "sign_in" && (
+                  <button
+                    type="button"
+                    onClick={() => void handleForgotPassword()}
+                    disabled={resettingPassword}
+                    className="text-left text-xs text-primary hover:text-primary/80 disabled:text-muted-foreground"
+                  >
+                    {resettingPassword ? "Sending reset email..." : "Forgot password?"}
+                  </button>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-3">

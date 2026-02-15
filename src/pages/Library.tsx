@@ -25,7 +25,7 @@ import {
 } from "@/lib/cloudSync";
 import { buildBookDedupeKey, normalizeDedupeValue } from "@/lib/bookDedupe";
 import { applySort, type SortMode } from "@/lib/librarySort";
-import { enrichCovers } from "@/lib/coverEnrichment";
+import { clearCoverCacheForBook, enrichCovers } from "@/lib/coverEnrichment";
 
 type LibraryBook = {
   id?: string;
@@ -37,13 +37,26 @@ type LibraryBook = {
   status: string;
   isbn?: string | null;
   isbn13?: string | null;
+  published_year?: number | null;
   rating?: number | null;
   date_read?: string | null;
   shelf?: string | null;
   description?: string | null;
   page_count?: number | null;
   thumbnail?: string | null;
+  cover_url?: string | null;
+  cover_source?: string | null;
+  cover_failed_at?: string | null;
   source?: string | null;
+};
+
+type ImportSummary = {
+  fileName: string;
+  rowsRead: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: number;
 };
 
 const db = supabase as any;
@@ -93,6 +106,8 @@ const Library = () => {
   const [loadingBooks, setLoadingBooks] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<string | null>(null);
+  const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
   const [enrichOnImport, setEnrichOnImport] = useState(true);
   const [importLogs, setImportLogs] = useState<
     {
@@ -202,6 +217,7 @@ const Library = () => {
 
     const cloudBooks = (data || []) as LibraryBook[];
     setBooks(cloudBooks);
+    setLocalBooks(cloudBooks);
 
     const localBooks = getLocalBooks();
     if (cloudBooks.length === 0 && localBooks.length > 0 && userIdValue) {
@@ -221,31 +237,58 @@ const Library = () => {
     }
   }, []);
 
-  // Cover enrichment effect — reset when book count changes to allow re-enrichment after import
+  // Cover enrichment effect. Fetch covers only for rows missing persisted cover values.
   const enrichRunRef = useRef(false);
   const lastBookCountRef = useRef(0);
   useEffect(() => {
-    // Reset enrichment flag when books array changes size (e.g. after import)
     if (books.length !== lastBookCountRef.current) {
       enrichRunRef.current = false;
       lastBookCountRef.current = books.length;
     }
     if (books.length === 0 || enrichRunRef.current) return;
-    const needsCovers = books.some((b) => !b.thumbnail);
+    const needsCovers = books.some((b) => !(b.cover_url || b.thumbnail));
     if (!needsCovers) return;
     enrichRunRef.current = true;
-    if (import.meta.env.DEV) console.log("[ShelfGuide] Starting cover enrichment for", books.filter(b => !b.thumbnail).length, "books without covers");
-    enrichCovers(books, (index, coverUrl) => {
+    const snapshot = [...books];
+    if (import.meta.env.DEV) {
+      console.log(
+        "[ShelfGuide] Starting cover enrichment for",
+        books.filter((b) => !(b.cover_url || b.thumbnail)).length,
+        "books without covers"
+      );
+    }
+    enrichCovers(snapshot, (index, coverUrl) => {
+      const target = snapshot[index];
+      if (!target || !coverUrl) return;
+      const targetKey = buildBookDedupeKey(target);
       setBooks((prev) => {
-        const next = [...prev];
-        if (next[index]) next[index] = { ...next[index], thumbnail: coverUrl };
+        const next = prev.map((entry) =>
+          buildBookDedupeKey(entry) === targetKey
+            ? {
+                ...entry,
+                cover_url: coverUrl,
+                thumbnail: coverUrl,
+                cover_source: entry.cover_source || "google_books",
+                cover_failed_at: null,
+              }
+            : entry
+        );
+        setLocalBooks(next);
         return next;
       });
-      // Sync cover to cloud if signed in — never overwrite existing cover with null
-      const book = books[index];
-      if (userId && book && coverUrl) {
-        upsertBooksToCloud(userId, [{ ...book, thumbnail: coverUrl }]).catch((err) => {
-          if (import.meta.env.DEV) console.warn("[ShelfGuide] Cover sync to cloud failed:", err);
+      if (userId) {
+        upsertBooksToCloud(userId, [
+          {
+            ...target,
+            cover_url: coverUrl,
+            thumbnail: coverUrl,
+            cover_source: "google_books",
+            cover_failed_at: null,
+          },
+        ]).catch((err) => {
+          if (import.meta.env.DEV) {
+            console.warn("[ShelfGuide] Cover sync to cloud failed:", err);
+          }
         });
       }
     });
@@ -411,15 +454,41 @@ const Library = () => {
     value.trim().toLowerCase().replace(/[\s-]+/g, "_");
 
   const stripGoodreadsIsbn = (raw: string) => {
-    return raw.replace(/^="?|"$/g, "").trim();
+    return raw.replace(/^="?|"$/g, "").replace(/[^0-9xX]/g, "").trim();
   };
 
-  const mapShelfToStatus = (shelf: string) => {
-    const normalized = normalizeDedupeValue(shelf);
+  const mapShelfToStatus = (shelf: string | null | undefined, bookshelves: string | null | undefined) => {
+    const normalized = normalizeDedupeValue(shelf || "");
     if (normalized === "to-read") return "tbr";
     if (normalized === "currently-reading") return "reading";
     if (normalized === "read") return "finished";
+    const normalizedShelves = normalizeDedupeValue(bookshelves || "");
+    if (normalizedShelves.includes("currently-reading")) return "reading";
+    if (normalizedShelves.includes("read")) return "finished";
+    if (normalizedShelves.includes("to-read")) return "tbr";
     return "tbr";
+  };
+
+  const parseGoodreadsDate = (value: string | null | undefined): string | null => {
+    const raw = (value || "").trim();
+    if (!raw) return null;
+    const asDate = new Date(raw);
+    if (Number.isNaN(asDate.getTime())) return null;
+    return asDate.toISOString().slice(0, 10);
+  };
+
+  const parsePublishedYear = (value: string | null | undefined): number | null => {
+    const raw = (value || "").trim();
+    if (!raw) return null;
+    const year = Number(raw);
+    if (!Number.isFinite(year)) return null;
+    if (year < 0 || year > 9999) return null;
+    return Math.trunc(year);
+  };
+
+  const hasGoodreadsHeaders = (headers: string[]) => {
+    const set = new Set(headers);
+    return set.has("title") && set.has("author");
   };
 
   const parseCsv = (text: string) => {
@@ -546,16 +615,36 @@ const Library = () => {
   };
 
   const handleGoodreadsImport = async (file: File) => {
+    const userIdValue = await getAuthenticatedUserId();
+    if (!userIdValue) {
+      toast.error("Sign in to import Goodreads data into your cloud library.");
+      return;
+    }
+
+    setImportSummary(null);
+    setImportProgress("Reading CSV file...");
+
     const text = await file.text();
     const rows = parseCsv(text).filter((row) => row.some((cell) => cell.trim().length));
     if (rows.length < 2) {
       toast.error("CSV is empty or missing rows.");
+      setImportProgress(null);
       return;
     }
 
     const headers = rows[0].map(normalizeHeader);
+    if (!hasGoodreadsHeaders(headers)) {
+      toast.error(
+        "Invalid Goodreads CSV header. Required columns: Title and Author. Optional: ISBN, ISBN13, Year Published, Exclusive Shelf, Bookshelves, Date Read, Date Added, My Rating."
+      );
+      setImportProgress(null);
+      return;
+    }
+
     const dataRows = rows.slice(1);
+    const rowsRead = dataRows.length;
     const failures: string[] = [];
+    let skipped = 0;
 
     const records = dataRows.map((row) => {
       const record: Record<string, string> = {};
@@ -570,16 +659,23 @@ const Library = () => {
         const bookTitle = record.title?.trim() || "";
         const bookAuthor = record.author?.trim() || "";
         if (!bookTitle || !bookAuthor) {
-          failures.push(`Row ${index + 2}: missing title or author.`);
+          skipped += 1;
+          failures.push(`Row ${index + 2}: missing Title or Author.`);
           return null;
         }
+
         const shelf = record.exclusive_shelf || record.shelf || "";
-        const bookStatus = shelf ? mapShelfToStatus(shelf) : "tbr";
+        const bookshelves = record.bookshelves || "";
+        const bookStatus = mapShelfToStatus(shelf, bookshelves);
         const isbn = stripGoodreadsIsbn(record.isbn || "");
         const isbn13 = stripGoodreadsIsbn(record.isbn13 || "");
         const rawRating = record.my_rating ? Number(record.my_rating) : null;
         const rating = rawRating && rawRating > 0 ? rawRating : null;
-        const dateRead = record.date_read?.trim() || null;
+        const publishedYear = parsePublishedYear(
+          record.year_published || record.original_publication_year || ""
+        );
+        const dateRead = parseGoodreadsDate(record.date_read || null);
+
         return {
           title: bookTitle,
           author: bookAuthor,
@@ -589,9 +685,10 @@ const Library = () => {
           status: bookStatus,
           isbn: isbn || null,
           isbn13: isbn13 || null,
+          published_year: publishedYear,
           rating: Number.isFinite(rating) ? rating : null,
           date_read: dateRead,
-          shelf: shelf || null,
+          shelf: shelf || bookshelves || null,
           source: "goodreads_import",
         } as LibraryBook;
       })
@@ -599,158 +696,188 @@ const Library = () => {
 
     if (!parsed.length) {
       toast.error("No valid rows found in Goodreads export.");
+      setImportProgress(null);
       return;
     }
 
     setImporting(true);
+    setImportProgress(`Parsing complete. ${parsed.length} valid rows found. Starting import...`);
 
-    let enriched: LibraryBook[] = parsed;
-    if (userId && enrichOnImport) {
-      try {
-        const batches: LibraryBook[][] = [];
-        for (let i = 0; i < parsed.length; i += 8) {
-          batches.push(parsed.slice(i, i + 8));
-        }
-
-        const enrichedResults: LibraryBook[] = [];
-        for (const batch of batches) {
-          const { data } = await supabase.functions.invoke("goodreads-enrich", {
-            body: {
-              items: batch.map((item) => ({
-                isbn: item.isbn,
-                isbn13: item.isbn13,
-                title: item.title,
-                author: item.author,
-              })),
-            },
-          });
-          const results = (data?.results || []) as Array<{
-            description?: string | null;
-            pageCount?: number | null;
-            categories?: string[];
-            thumbnail?: string | null;
-          }>;
-          batch.forEach((item, idx) => {
-            const meta = results[idx];
-            enrichedResults.push({
-              ...item,
-              description: meta?.description || item.description || null,
-              page_count: meta?.pageCount ?? item.page_count ?? null,
-              genre: meta?.categories?.[0] || item.genre || "",
-              thumbnail: meta?.thumbnail || item.thumbnail || null,
-            });
-          });
-        }
-        enriched = enrichedResults;
-      } catch {
-        toast.error("Metadata enrichment failed. Imported without extra details.");
-      }
-    }
-
-    const existing = books;
-    const keyToIndex = new Map<string, number>();
-    existing.forEach((book, index) => {
-      keyToIndex.set(buildBookDedupeKey(book), index);
-    });
-
-    let added = 0;
+    let created = 0;
     let updated = 0;
-    const upserts: LibraryBook[] = [];
 
-    enriched.forEach((book) => {
-      const key = buildBookDedupeKey(book);
-      const existingIndex = keyToIndex.get(key);
-      if (existingIndex === undefined) {
-        added += 1;
-        upserts.push(book);
-        keyToIndex.set(key, existing.length + upserts.length - 1);
+    try {
+      let enriched: LibraryBook[] = parsed;
+      if (enrichOnImport) {
+        setImportProgress("Enriching metadata and covers from Google Books...");
+        try {
+          const batches: LibraryBook[][] = [];
+          for (let i = 0; i < parsed.length; i += 8) {
+            batches.push(parsed.slice(i, i + 8));
+          }
+
+          const enrichedResults: LibraryBook[] = [];
+          let processed = 0;
+          for (const batch of batches) {
+            const { data, error } = await supabase.functions.invoke("goodreads-enrich", {
+              body: {
+                items: batch.map((item) => ({
+                  isbn: item.isbn,
+                  isbn13: item.isbn13,
+                  title: item.title,
+                  author: item.author,
+                })),
+              },
+            });
+            if (error) {
+              failures.push(`Metadata enrichment batch failed: ${error.message}`);
+            }
+            const results = (data?.results || []) as Array<{
+              description?: string | null;
+              pageCount?: number | null;
+              categories?: string[];
+              thumbnail?: string | null;
+            }>;
+            batch.forEach((item, idx) => {
+              const meta = results[idx];
+              const cover = meta?.thumbnail || item.cover_url || item.thumbnail || null;
+              enrichedResults.push({
+                ...item,
+                description: item.description || meta?.description || null,
+                page_count: item.page_count ?? meta?.pageCount ?? null,
+                genre: item.genre || meta?.categories?.[0] || "",
+                cover_url: cover,
+                thumbnail: cover,
+                cover_source: cover ? "google_books" : item.cover_source || null,
+                cover_failed_at: cover ? null : item.cover_failed_at || null,
+              });
+            });
+            processed += batch.length;
+            setImportProgress(`Enriched ${processed}/${parsed.length} books...`);
+          }
+          enriched = enrichedResults;
+        } catch (error) {
+          failures.push(`Metadata enrichment failed: ${(error as Error).message || "unknown error"}`);
+          setImportProgress("Metadata enrichment failed. Continuing import with CSV data.");
+        }
+      }
+
+      const existing = books;
+      const keyToBook = new Map<string, LibraryBook>();
+      existing.forEach((book) => {
+        keyToBook.set(buildBookDedupeKey(book), book);
+      });
+
+      const upserts: LibraryBook[] = [];
+      const seenKeys = new Set<string>();
+      for (const incoming of enriched) {
+        const key = buildBookDedupeKey(incoming);
+        if (seenKeys.has(key)) {
+          skipped += 1;
+          continue;
+        }
+        seenKeys.add(key);
+
+        const current = keyToBook.get(key);
+        if (!current) {
+          created += 1;
+          upserts.push(incoming);
+          keyToBook.set(key, incoming);
+          continue;
+        }
+
+        updated += 1;
+        upserts.push({
+          ...current,
+          ...incoming,
+          id: current.id,
+          genre: current.genre || incoming.genre || "",
+          cover_url: current.cover_url || current.thumbnail || incoming.cover_url || incoming.thumbnail || null,
+          thumbnail: current.cover_url || current.thumbnail || incoming.cover_url || incoming.thumbnail || null,
+          cover_source: current.cover_source || incoming.cover_source || null,
+          cover_failed_at: null,
+        });
+      }
+
+      if (!upserts.length) {
+        toast.error("No rows were eligible for import after dedupe.");
+        setImportProgress(null);
+        setImportSummary({ fileName: file.name, rowsRead, created, updated, skipped, errors: failures.length });
         return;
       }
 
-      const current = existing[existingIndex];
-      const merged: LibraryBook = {
-        ...current,
-        status: book.status || current.status,
-        shelf: book.shelf || current.shelf,
-        isbn: current.isbn || book.isbn,
-        isbn13: current.isbn13 || book.isbn13,
-        rating: current.rating ?? book.rating ?? null,
-        date_read: current.date_read || book.date_read || null,
-        description: current.description || book.description || null,
-        page_count: current.page_count ?? book.page_count ?? null,
-        // Never overwrite existing cover with null
-        thumbnail: current.thumbnail || book.thumbnail || null,
-        genre: current.genre || book.genre,
-      };
-      updated += 1;
-      upserts.push(merged);
-    });
-
-    if (userId) {
-      const { error } = await retryAsync(() => upsertBooksToCloud(userId, upserts), 1, 350);
+      setImportProgress("Writing books to cloud library...");
+      const { error } = await retryAsync(() => upsertBooksToCloud(userIdValue, upserts), 1, 350);
       if (error) {
         failures.push(error.message);
-        enqueueLibrarySync(userId, upserts, "goodreads_csv", file.name);
+        enqueueLibrarySync(userIdValue, upserts, "goodreads_csv", file.name);
         setCloudNotice("Goodreads import queued for background sync.");
       }
-      await loadBooks(userId);
+
+      await loadBooks(userIdValue);
       await db.from("import_logs").insert({
-        user_id: userId,
+        user_id: userIdValue,
         source: `goodreads_csv:${file.name}`,
-        added_count: added,
+        added_count: created,
         updated_count: updated,
         failed_count: failures.length,
         failures,
       });
-      await loadImportLogs(userId);
-    } else {
-      const nextBooks = [...books];
-      upserts.forEach((book) => {
-        const key = buildBookDedupeKey(book);
-        const existingIndex = keyToIndex.get(key);
-        if (existingIndex === undefined) {
-          nextBooks.push(book);
-          keyToIndex.set(key, nextBooks.length - 1);
-        } else {
-          nextBooks[existingIndex] = book;
-        }
-      });
-      persistBooks(nextBooks);
-    }
+      await loadImportLogs(userIdValue);
 
-    setImporting(false);
-    toast.success(
-      `Goodreads import complete. Added ${added}, updated ${updated}, failed ${failures.length}.`
-    );
+      const summary = {
+        fileName: file.name,
+        rowsRead,
+        created,
+        updated,
+        skipped,
+        errors: failures.length,
+      };
+      setImportSummary(summary);
+      setImportProgress(null);
+      toast.success(
+        `Goodreads import complete. Rows: ${summary.rowsRead}, created: ${summary.created}, updated: ${summary.updated}, skipped: ${summary.skipped}, errors: ${summary.errors}.`
+      );
+    } finally {
+      setImporting(false);
+    }
   };
 
   /** Retry cover for a specific book */
-  const retryCover = (book: LibraryBook, bookIndex: number) => {
+  const retryCover = (book: LibraryBook) => {
     // Clear from failed set
     setFailedCovers((prev) => {
       const next = new Set(prev);
       next.delete(book.title + "|" + book.author);
       return next;
     });
-    // Clear from localStorage cache
-    const CACHE_KEY = "shelfguide-cover-cache";
-    try {
-      const cache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
-      const key = `${book.title.trim().toLowerCase()}|${book.author.trim().toLowerCase()}`;
-      delete cache[key];
-      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-    } catch { /* ignore */ }
+    clearCoverCacheForBook(book);
     // Re-run enrichment for this single book
     enrichCovers([book], (_, coverUrl) => {
       setBooks((prev) => {
         const realIdx = prev.indexOf(book);
         if (realIdx < 0) return prev;
         const next = [...prev];
-        next[realIdx] = { ...next[realIdx], thumbnail: coverUrl };
+        next[realIdx] = {
+          ...next[realIdx],
+          cover_url: coverUrl,
+          thumbnail: coverUrl,
+          cover_source: "google_books",
+          cover_failed_at: null,
+        };
+        setLocalBooks(next);
         return next;
       });
       if (userId && coverUrl) {
-        upsertBooksToCloud(userId, [{ ...book, thumbnail: coverUrl }]).catch(() => {});
+        upsertBooksToCloud(userId, [
+          {
+            ...book,
+            cover_url: coverUrl,
+            thumbnail: coverUrl,
+            cover_source: "google_books",
+            cover_failed_at: null,
+          },
+        ]).catch(() => {});
       }
       toast.success(`Cover found for "${book.title}"`);
     });
@@ -964,6 +1091,17 @@ const Library = () => {
                 Enrich metadata (Google Books)
               </label>
             </div>
+            {importProgress && (
+              <p className="text-xs text-muted-foreground mt-3">{importProgress}</p>
+            )}
+            {importSummary && (
+              <div className="mt-3 rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs">
+                <div className="font-medium">Latest import: {importSummary.fileName}</div>
+                <div className="text-muted-foreground mt-1">
+                  Rows {importSummary.rowsRead} | Created {importSummary.created} | Updated {importSummary.updated} | Skipped {importSummary.skipped} | Errors {importSummary.errors}
+                </div>
+              </div>
+            )}
             {!userId && (
               <p className="text-xs text-muted-foreground mt-3">
                 Sign in to save import history and enrich metadata securely.
@@ -1051,22 +1189,36 @@ const Library = () => {
           {displayedBooks.map((book, index) => {
             const coverKey = book.title + "|" + book.author;
             const coverFailed = failedCovers.has(coverKey);
+            const coverSrc = book.cover_url || book.thumbnail;
             return (
               <div
-                key={`${book.title}-${book.id || index}`}
+                key={book.id || `${buildBookDedupeKey(book)}-${index}`}
                 className="rounded-xl border border-border/60 bg-card/70 p-4 shadow-sm"
               >
                 <div className="flex gap-3">
                   {/* Cover image with robust fallback */}
                   <div className="flex-shrink-0 w-16 aspect-[2/3] rounded-md overflow-hidden bg-secondary/40 flex items-center justify-center relative">
-                    {book.thumbnail && !coverFailed ? (
+                    {coverSrc && !coverFailed ? (
                       <img
-                        src={book.thumbnail}
+                        src={coverSrc}
                         alt={book.title}
                         className="w-full h-full object-cover"
-                        onError={(e) => {
-                          if (import.meta.env.DEV) console.warn(`[ShelfGuide] Cover load failed: "${book.title}" url=${book.thumbnail}`);
-                          setFailedCovers((prev) => new Set(prev).add(coverKey));
+                        loading="lazy"
+                        onError={() => {
+                          let shouldPersistFailure = false;
+                          setFailedCovers((prev) => {
+                            if (prev.has(coverKey)) return prev;
+                            shouldPersistFailure = true;
+                            console.warn(`[ShelfGuide] Cover load failed for book id=${book.id || "unknown"} url=${coverSrc}`);
+                            return new Set(prev).add(coverKey);
+                          });
+                          if (userId) {
+                            if (!shouldPersistFailure) return;
+                            void db
+                              .from("books")
+                              .update({ cover_failed_at: new Date().toISOString() })
+                              .eq("id", book.id || "");
+                          }
                         }}
                       />
                     ) : (
@@ -1074,7 +1226,7 @@ const Library = () => {
                         <BookOpen className="w-5 h-5 text-muted-foreground/40" />
                         {(coverFailed || !book.thumbnail) && (
                           <button
-                            onClick={() => retryCover(book, index)}
+                            onClick={() => retryCover(book)}
                             className="text-[9px] text-primary/70 hover:text-primary flex items-center gap-0.5"
                             title="Retry cover fetch"
                           >
