@@ -90,7 +90,13 @@ export const enrichCovers = async <T extends EnrichableBook>(
     toFetch.push({ index: i, book });
   }
 
-  if (toFetch.length === 0) return;
+  if (toFetch.length === 0) {
+    if (import.meta.env.DEV) console.log("[ShelfGuide] Cover enrichment: nothing to fetch (all cached or have covers).");
+    return;
+  }
+  if (import.meta.env.DEV) console.log(`[ShelfGuide] Cover enrichment: fetching ${toFetch.length} covers...`);
+  let successCount = 0;
+  let failCount = 0;
 
   let running = 0;
   let cursor = 0;
@@ -105,8 +111,10 @@ export const enrichCovers = async <T extends EnrichableBook>(
       if (url) {
         cache[key] = { url, failedAt: null };
         onUpdate(item.index, url);
+        successCount++;
       } else {
         cache[key] = { url: null, failedAt: new Date().toISOString() };
+        failCount++;
       }
       running--;
       saveCache(cache);
@@ -119,4 +127,5 @@ export const enrichCovers = async <T extends EnrichableBook>(
     () => processNext()
   );
   await Promise.all(workers);
+  if (import.meta.env.DEV) console.log(`[ShelfGuide] Cover enrichment complete: ${successCount} found, ${failCount} failed.`);
 };

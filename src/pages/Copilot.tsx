@@ -300,7 +300,17 @@ const Copilot = () => {
         body: { prompt, tags: promptTags, surprise, limit: 4 },
       });
       if (error || !data) {
-        setStatusMessage("Copilot is offline. Showing fallback recommendations.");
+        // Classify the error for a helpful message
+        let reason = "Service temporarily unavailable. Showing curated picks.";
+        if (!navigator.onLine) {
+          reason = "No internet connection. Showing curated picks.";
+        } else if (error?.message?.includes("401") || error?.message?.includes("403")) {
+          reason = "Session expired. Please sign in again.";
+        } else if (error?.message?.includes("429")) {
+          reason = "Too many requests. Try again in a moment.";
+        }
+        if (import.meta.env.DEV) console.warn("[ShelfGuide] Copilot edge function error:", error);
+        setStatusMessage(reason);
         setRecommendations(scoreFallback(FALLBACK_CATALOG, books, feedbackWeights, promptTags, surprise));
         setLoadingRecommendations(false);
         return;
@@ -311,7 +321,7 @@ const Copilot = () => {
       setLoadingRecommendations(false);
       return;
     }
-    setStatusMessage("Sign in for the full AI copilot. Showing fallback picks.");
+    setStatusMessage("Sign in for AI-powered recommendations. Showing curated picks.");
     setRecommendations(scoreFallback(FALLBACK_CATALOG, books, feedbackWeights, promptTags, surprise));
     setHistoryEntries([]);
     setLoadingRecommendations(false);
@@ -328,7 +338,7 @@ const Copilot = () => {
         const next = [entry, ...feedbackEntries].slice(0, 50);
         setFeedbackEntries(next); saveLocalFeedback(next);
         enqueueFeedbackSync(userId, entry);
-        setCloudNotice("Feedback queued for cloud sync.");
+        setCloudNotice("Will sync when online.");
         return;
       }
       const next = [entry, ...feedbackEntries].slice(0, 50);
@@ -446,7 +456,12 @@ const Copilot = () => {
 
         <section className="grid gap-4">
           <div className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-primary" /><h2 className="font-display text-2xl font-bold">Recommendations</h2></div>
-          {statusMessage && <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-4 text-sm text-muted-foreground">{statusMessage}</div>}
+          {statusMessage && (
+            <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-4 text-sm text-muted-foreground flex items-center justify-between gap-3">
+              <span>{statusMessage}</span>
+              <Button size="sm" variant="outline" onClick={fetchRecommendations} disabled={loadingRecommendations}>Retry</Button>
+            </div>
+          )}
           {recommendations.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-8 text-center">
               <h3 className="font-display text-xl font-bold mb-2">Ready when you are</h3>

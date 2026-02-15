@@ -70,8 +70,8 @@ const Index = () => {
               <BookOpen className="w-4 h-4" />AI-Powered Book Discovery
             </div>
             <p className="text-sm md:text-base font-body uppercase tracking-[0.25em] text-primary/70 mb-4">ShelfGuide — Because choosing is the hardest part.</p>
-            <h1 className="font-display text-5xl md:text-7xl lg:text-8xl font-bold tracking-tight mb-6">
-              How It<br /><span className="text-primary">Works</span>
+            <h1 className="font-display text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight mb-6 whitespace-nowrap">
+              How It <span className="text-primary">Works</span>
             </h1>
             <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-10 font-body">
               Build your personal library, chat with an intelligent copilot, and discover your next great read — with recommendations that actually understand you.
