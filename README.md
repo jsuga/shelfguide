@@ -318,18 +318,18 @@ Where to get them:
 - `SUPABASE_ANON_KEY`: Supabase Project Settings -> API -> anon public key.
 - `SUPABASE_ACCESS_TOKEN`: Sign in via the app in your browser, open DevTools -> Application -> Local Storage, and copy the `access_token` from the `sb-<project-ref>-auth-token` entry.
 
-## Goodreads Import (CSV)
+## CSV Import (Goodreads export supported)
 
 This integration is import-based (not an API connection). You can re-run it anytime.
 
-### Export from Goodreads
+### Export from Goodreads (optional)
 
 1. Go to Goodreads -> My Books -> Import and Export.
 2. Click “Export Library” to download your CSV.
 
 ### Import here
 
-Go to **My Library** and use the **Goodreads Import** card to upload the CSV. The app maps shelves:
+Go to **My Library** -> **Advanced** and use the CSV import card to upload the file. The app maps shelves:
 
 - `to-read` -> `tbr`
 - `currently-reading` -> `reading`
@@ -375,7 +375,7 @@ If cloud write fails, import data is queued locally and retried in the backgroun
   - `isbn13:<isbn13>` when ISBN13 is present
   - `isbn10:<isbn10>` when ISBN10 is present and ISBN13 is absent
   - `title_author_year:<normalized_title>|<normalized_author>|<published_year_or_unknown>` otherwise
-- Used across manual CSV import, Goodreads import merge, demo seed checks, and add-to-library flows.
+- Used across manual CSV import, CSV merge (Goodreads export), demo seed checks, and add-to-library flows.
 
 ### Database dedupe enforcement
 
@@ -393,7 +393,7 @@ If cloud write fails, import data is queued locally and retried in the backgroun
   - Added **Forgot password?** in Sign In dialog.
   - Added reset route: `/reset-password`.
   - Recovery flow uses Supabase `resetPasswordForEmail` with `redirectTo=<origin>/reset-password`.
-- Goodreads import reliability:
+- CSV import reliability (Goodreads export supported):
   - Required header validation (`Title`, `Author`) with actionable errors.
   - Progress status and completion summary (`rows read/created/updated/skipped/errors`).
   - Shelf mapping includes `Exclusive Shelf` and `Bookshelves`.

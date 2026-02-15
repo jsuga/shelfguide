@@ -32,7 +32,7 @@ const themeCards: {
 ];
 
 const howItWorksSteps = [
-  { icon: Upload, title: "Import Your Books", description: "Upload a Goodreads CSV export or add books manually. We'll enrich them with cover images and metadata." },
+  { icon: Upload, title: "Import Your Books", description: "Upload a CSV file or add books manually. We'll enrich them with cover images and metadata." },
   { icon: Library, title: "Manage Your Library", description: "Organize books by status, genre, and series. Search, sort, and track what you've read." },
   { icon: Disc3, title: "Spin the TBR Wheel", description: "Can't decide what to read next? Let the wheel choose from your TBR pile." },
   { icon: MessageSquare, title: "Chat with the AI Copilot", description: "Get personalized recommendations with clear explanations. Accept or reject to refine future suggestions." },
