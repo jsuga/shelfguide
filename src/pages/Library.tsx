@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookMarked, BookOpen, Search, Star, RefreshCw } from "lucide-react";
+import { BookMarked, BookOpen, Search, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent } from "@/components/ui/card";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
 import {
   Drawer,
   DrawerContent,
@@ -15,9 +17,12 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer";
 import { toast } from "sonner";
+import StarRating from "@/components/StarRating";
+import StatusSelector from "@/components/StatusSelector";
 import { supabase } from "@/integrations/supabase/client";
 import {
   enqueueLibrarySync,
+  recordSyncError,
   flushAllPendingSync,
   getAuthenticatedUserId,
   retryAsync,
@@ -61,7 +66,7 @@ type ImportSummary = {
 
 const db = supabase as any;
 
-/** Canonical status normalizer — single source of truth */
+/** Canonical status normalizer - single source of truth */
 export const normalizeStatus = (raw: string | null | undefined): string => {
   if (!raw) return "tbr";
   const s = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
@@ -127,6 +132,8 @@ const Library = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("title_az");
   const [failedCovers, setFailedCovers] = useState<Set<string>>(new Set());
+  const [savingRatings, setSavingRatings] = useState<Record<string, boolean>>({});
+  const [savingStatuses, setSavingStatuses] = useState<Record<string, boolean>>({});
 
   const getLocalBooks = () => {
     const stored = localStorage.getItem("reading-copilot-library");
@@ -156,7 +163,7 @@ const Library = () => {
       .limit(6);
     setLoadingLogs(false);
     if (error) {
-      // import_logs table may not exist — don't show sync banner for this
+      // import_logs table may not exist - don't show sync banner for this
       if (import.meta.env.DEV) console.warn("[ShelfGuide] loadImportLogs error (non-critical):", error.message);
       return;
     }
@@ -207,12 +214,13 @@ const Library = () => {
 
     if (error) {
       const reason = classifySyncError(error);
+      const syncError = await recordSyncError({ error, operation: "select", table: "books", userId: userIdValue });
       if (import.meta.env.DEV) console.warn("[ShelfGuide] loadBooks failed:", { reason, error: error.message, timestamp: new Date().toISOString() });
-      setCloudNotice(`Cloud sync is unavailable — ${reason.toLowerCase()}. Using local-only data for now.`);
+      setCloudNotice(syncError.userMessage || `Cloud sync is unavailable - ${reason.toLowerCase()}. Using local-only data for now.`);
       setBooks(getLocalBooks());
       return;
     }
-    // Cloud succeeded — clear any previous notice
+    // Cloud succeeded - clear any previous notice
     setCloudNotice(null);
 
     const cloudBooks = (data || []) as LibraryBook[];
@@ -285,7 +293,8 @@ const Library = () => {
             cover_source: "google_books",
             cover_failed_at: null,
           },
-        ]).catch((err) => {
+        ]).catch(async (err) => {
+          await recordSyncError({ error: err, operation: "upsert", table: "books", userId });
           if (import.meta.env.DEV) {
             console.warn("[ShelfGuide] Cover sync to cloud failed:", err);
           }
@@ -374,6 +383,68 @@ const Library = () => {
     setLocalBooks(nextBooks);
   };
 
+  const getBookKey = (book: LibraryBook) => book.id || buildBookDedupeKey(book);
+
+  const updateBookStatus = async (book: LibraryBook, nextStatus: string) => {
+    const key = getBookKey(book);
+    const updated = { ...book, status: nextStatus };
+    setBooks((prev) => {
+      const next = prev.map((b) => (getBookKey(b) === key ? updated : b));
+      setLocalBooks(next);
+      return next;
+    });
+    setSavingStatuses((prev) => ({ ...prev, [key]: true }));
+
+    if (userId && book.id) {
+      const { error } = await db.from("books").update({ status: nextStatus }).eq("id", book.id);
+      setSavingStatuses((prev) => ({ ...prev, [key]: false }));
+      if (error) {
+        await recordSyncError({ error, operation: "update", table: "books", userId });
+        toast.error("Could not update status. Saved locally and queued for retry.");
+        enqueueLibrarySync(userId, [{ ...book, status: nextStatus }], "status_update");
+        return;
+      }
+      toast.success("Status updated.");
+      return;
+    }
+
+    setSavingStatuses((prev) => ({ ...prev, [key]: false }));
+    if (!userId) return;
+
+    // If we do not have a book id while signed in, queue the change.
+    enqueueLibrarySync(userId, [{ ...book, status: nextStatus }], "status_update");
+  };
+
+  const updateBookRating = async (book: LibraryBook, nextRating: number | null) => {
+    const key = getBookKey(book);
+    const updated = { ...book, rating: nextRating };
+    setBooks((prev) => {
+      const next = prev.map((b) => (getBookKey(b) === key ? updated : b));
+      setLocalBooks(next);
+      return next;
+    });
+    setSavingRatings((prev) => ({ ...prev, [key]: true }));
+
+    if (userId && book.id) {
+      const { error } = await db.from("books").update({ rating: nextRating }).eq("id", book.id);
+      setSavingRatings((prev) => ({ ...prev, [key]: false }));
+      if (error) {
+        await recordSyncError({ error, operation: "update", table: "books", userId });
+        toast.error("Could not update rating. Saved locally and queued for retry.");
+        const payload = { ...book, rating: nextRating, explicit_nulls: nextRating == null ? ["rating"] : undefined };
+        enqueueLibrarySync(userId, [payload], "rating_update");
+        return;
+      }
+      toast.success("Rating saved.");
+      return;
+    }
+
+    setSavingRatings((prev) => ({ ...prev, [key]: false }));
+    if (!userId) return;
+    const payload = { ...book, rating: nextRating, explicit_nulls: nextRating == null ? ["rating"] : undefined };
+    enqueueLibrarySync(userId, [payload], "rating_update");
+  };
+
   const startEditing = (index: number) => {
     const book = displayedBooks[index];
     if (!book) return;
@@ -398,6 +469,7 @@ const Library = () => {
       status: editStatus,
     };
     const target = books[editingIndex];
+    const merged = target ? { ...target, ...updatedBook, id: target.id } : { ...updatedBook, id: target?.id };
 
     if (userId && target?.id) {
       (async () => {
@@ -406,11 +478,12 @@ const Library = () => {
           .update(updatedBook)
           .eq("id", target.id);
         if (error) {
-          toast.error("Could not update book.");
+          await recordSyncError({ error, operation: "update", table: "books", userId });
+          toast.error("Could not update book. Please retry.");
           return;
         }
         const nextBooks = [...books];
-        nextBooks[editingIndex] = { ...updatedBook, id: target.id };
+        nextBooks[editingIndex] = merged;
         setBooks(nextBooks);
         setEditingIndex(null);
         toast.success("Book updated.");
@@ -419,7 +492,7 @@ const Library = () => {
     }
 
     const nextBooks = [...books];
-    nextBooks[editingIndex] = { ...updatedBook, id: target?.id };
+    nextBooks[editingIndex] = merged;
     persistBooks(nextBooks);
     setEditingIndex(null);
     toast.success("Book updated.");
@@ -436,7 +509,8 @@ const Library = () => {
           .delete()
           .eq("id", book.id);
         if (error) {
-          toast.error("Could not delete book.");
+          await recordSyncError({ error, operation: "delete", table: "books", userId });
+          toast.error("Could not delete book. Please retry.");
           return;
         }
         const nextBooks = books.filter((_, i) => i !== realIndex);
@@ -597,7 +671,8 @@ const Library = () => {
         350
       );
       if (error) {
-        toast.error(`Upload failed: ${error.message}. Saved locally and queued for retry.`);
+        const syncError = await recordSyncError({ error, operation: "upsert", table: "books", userId: userIdValue });
+        toast.error(`Upload failed: ${syncError.userMessage || syncError.message}. Saved locally and queued for retry.`);
         const nextBooks = [...books, ...booksFromCsv];
         persistBooks(nextBooks);
         enqueueLibrarySync(userIdValue, booksFromCsv, "manual_csv_upload", file.name);
@@ -670,7 +745,10 @@ const Library = () => {
         const isbn = stripGoodreadsIsbn(record.isbn || "");
         const isbn13 = stripGoodreadsIsbn(record.isbn13 || "");
         const rawRating = record.my_rating ? Number(record.my_rating) : null;
-        const rating = rawRating && rawRating > 0 ? rawRating : null;
+        const rating =
+          Number.isFinite(rawRating) && rawRating >= 1 && rawRating <= 5
+            ? Math.trunc(rawRating)
+            : null;
         const publishedYear = parsePublishedYear(
           record.year_published || record.original_publication_year || ""
         );
@@ -787,10 +865,12 @@ const Library = () => {
         }
 
         updated += 1;
+        const mergedRating = incoming.rating == null ? current.rating ?? null : incoming.rating;
         upserts.push({
           ...current,
           ...incoming,
           id: current.id,
+          rating: mergedRating,
           genre: current.genre || incoming.genre || "",
           cover_url: current.cover_url || current.thumbnail || incoming.cover_url || incoming.thumbnail || null,
           thumbnail: current.cover_url || current.thumbnail || incoming.cover_url || incoming.thumbnail || null,
@@ -809,9 +889,10 @@ const Library = () => {
       setImportProgress("Writing books to cloud library...");
       const { error } = await retryAsync(() => upsertBooksToCloud(userIdValue, upserts), 1, 350);
       if (error) {
-        failures.push(error.message);
+        const syncError = await recordSyncError({ error, operation: "upsert", table: "books", userId: userIdValue });
+        failures.push(syncError.message);
         enqueueLibrarySync(userIdValue, upserts, "goodreads_csv", file.name);
-        setCloudNotice("Goodreads import queued for background sync.");
+        setCloudNotice(syncError.userMessage || "Goodreads import queued for background sync.");
       }
 
       await loadBooks(userIdValue);
@@ -877,23 +958,12 @@ const Library = () => {
             cover_source: "google_books",
             cover_failed_at: null,
           },
-        ]).catch(() => {});
+        ]).catch(async (err) => {
+          await recordSyncError({ error: err, operation: "upsert", table: "books", userId });
+        });
       }
       toast.success(`Cover found for "${book.title}"`);
     });
-  };
-
-  const renderStars = (rating: number) => {
-    return (
-      <div className="flex gap-0.5">
-        {[1, 2, 3, 4, 5].map((n) => (
-          <Star
-            key={n}
-            className={`w-3 h-3 ${n <= rating ? "text-primary fill-primary" : "text-muted-foreground/30"}`}
-          />
-        ))}
-      </div>
-    );
   };
 
   /** Manual retry for cloud sync */
@@ -934,7 +1004,7 @@ const Library = () => {
               }
             }}
           />
-          {/* Removed duplicate sign-out — sign out lives in the navbar only */}
+          {/* Removed duplicate sign-out - sign out lives in the navbar only */}
           {userLabel && (
             <div className="flex items-center gap-3 text-xs text-muted-foreground font-body">
               <span>Signed in as {userLabel}</span>
@@ -1053,109 +1123,121 @@ const Library = () => {
         </div>
       )}
 
-      <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr] mb-10">
-        <Card className="border-border/60 bg-card/70">
-          <CardContent className="p-6">
-            <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Connect / Import</div>
-            <h2 className="font-display text-2xl font-bold mt-2">Goodreads Import</h2>
-            <p className="text-sm text-muted-foreground font-body mt-2">
-              This is a CSV import (not an API connection yet). You can re-run it anytime.
-            </p>
-            <p className="text-xs text-muted-foreground font-body mt-2">
-              Need a starter format for physical library uploads? Download the default template.
-            </p>
-            <ol className="list-decimal pl-5 mt-4 space-y-2 text-sm text-muted-foreground">
-              <li>Go to Goodreads &gt; My Books &gt; Import and Export.</li>
-              <li>Export your library to CSV.</li>
-              <li>Upload the CSV here.</li>
-            </ol>
-            <div className="mt-4 flex items-center gap-3">
-              <input
-                ref={importInputRef}
-                type="file"
-                accept=".csv"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) {
-                    void handleGoodreadsImport(file);
-                    event.target.value = "";
-                  }
-                }}
-              />
-              <Button onClick={() => importInputRef.current?.click()} disabled={importing}>
-                {importing ? "Importing..." : "Import Goodreads CSV"}
-              </Button>
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Checkbox checked={enrichOnImport} onCheckedChange={(checked) => setEnrichOnImport(checked === true)} />
-                Enrich metadata (Google Books)
-              </label>
+      <Accordion type="single" collapsible className="mb-10">
+        <AccordionItem value="advanced" className="border border-border/60 rounded-xl bg-card/70">
+          <AccordionTrigger className="px-6">
+            <div className="flex items-center gap-2">
+              <span className="font-display text-xl">Advanced</span>
+              <Badge variant="outline" className="text-[10px]">Goodreads import</Badge>
             </div>
-            {importProgress && (
-              <p className="text-xs text-muted-foreground mt-3">{importProgress}</p>
-            )}
-            {importSummary && (
-              <div className="mt-3 rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs">
-                <div className="font-medium">Latest import: {importSummary.fileName}</div>
-                <div className="text-muted-foreground mt-1">
-                  Rows {importSummary.rowsRead} | Created {importSummary.created} | Updated {importSummary.updated} | Skipped {importSummary.skipped} | Errors {importSummary.errors}
-                </div>
-              </div>
-            )}
-            {!userId && (
-              <p className="text-xs text-muted-foreground mt-3">
-                Sign in to save import history and enrich metadata securely.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="border-border/60 bg-card/70">
-          <CardContent className="p-6">
-            <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Import history</div>
-            <div className="flex items-center justify-between mt-2">
-              <h3 className="font-display text-xl font-bold">Recent imports</h3>
-              <div className="flex items-center gap-2">
-                {confirmClearLogs ? (
-                  <>
-                    <Button size="sm" variant="destructive" onClick={clearImportLogs}>Confirm clear</Button>
-                    <Button size="sm" variant="ghost" onClick={() => setConfirmClearLogs(false)}>Cancel</Button>
-                  </>
-                ) : (
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmClearLogs(true)}>Clear</Button>
-                )}
-              </div>
-            </div>
-            {loadingLogs ? (
-              <p className="text-sm text-muted-foreground mt-4">Loading history...</p>
-            ) : importLogs.length === 0 ? (
-              <p className="text-sm text-muted-foreground mt-4">No imports yet. Upload a Goodreads CSV to see history.</p>
-            ) : (
-              <div className="mt-4 grid gap-3">
-                {importLogs.map((log) => (
-                  <div key={log.id} className="rounded-lg border border-border/50 bg-background/70 p-3 text-sm">
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{log.source.replace(/_/g, " ")}</span>
-                      <span>{new Date(log.created_at).toLocaleDateString()}</span>
-                    </div>
-                    <div className="mt-1">Added {log.added_count}, updated {log.updated_count}, failed {log.failed_count}</div>
-                    {log.failed_count > 0 && (
-                      <div className="mt-2 text-xs text-muted-foreground space-y-1">
-                        {(log.failures || []).slice(0, 3).map((failure) => (
-                          <div key={failure}>- {failure}</div>
-                        ))}
-                        {log.failed_count > 3 && (
-                          <Button size="sm" variant="outline" className="mt-1" onClick={() => setSelectedFailures(log.failures || [])}>View all</Button>
-                        )}
-                      </div>
-                    )}
+          </AccordionTrigger>
+          <AccordionContent className="px-6 pb-6">
+            <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+              <Card className="border-border/60 bg-card/70">
+                <CardContent className="p-6">
+                  <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Connect / Import</div>
+                  <h2 className="font-display text-2xl font-bold mt-2">Goodreads Import</h2>
+                  <p className="text-sm text-muted-foreground font-body mt-2">
+                    This is a CSV import (not an API connection yet). You can re-run it anytime.
+                  </p>
+                  <p className="text-xs text-muted-foreground font-body mt-2">
+                    Need a starter format for physical library uploads? Download the default template.
+                  </p>
+                  <ol className="list-decimal pl-5 mt-4 space-y-2 text-sm text-muted-foreground">
+                    <li>Go to Goodreads &gt; My Books &gt; Import and Export.</li>
+                    <li>Export your library to CSV.</li>
+                    <li>Upload the CSV here.</li>
+                  </ol>
+                  <div className="mt-4 flex items-center gap-3">
+                    <input
+                      ref={importInputRef}
+                      type="file"
+                      accept=".csv"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) {
+                          void handleGoodreadsImport(file);
+                          event.target.value = "";
+                        }
+                      }}
+                    />
+                    <Button onClick={() => importInputRef.current?.click()} disabled={importing}>
+                      {importing ? "Importing..." : "Import Goodreads CSV"}
+                    </Button>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Checkbox checked={enrichOnImport} onCheckedChange={(checked) => setEnrichOnImport(checked === true)} />
+                      Enrich metadata (Google Books)
+                    </label>
                   </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </section>
+                  {importProgress && (
+                    <p className="text-xs text-muted-foreground mt-3">{importProgress}</p>
+                  )}
+                  {importSummary && (
+                    <div className="mt-3 rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs">
+                      <div className="font-medium">Latest import: {importSummary.fileName}</div>
+                      <div className="text-muted-foreground mt-1">
+                        Rows {importSummary.rowsRead} | Created {importSummary.created} | Updated {importSummary.updated} | Skipped {importSummary.skipped} | Errors {importSummary.errors}
+                      </div>
+                    </div>
+                  )}
+                  {!userId && (
+                    <p className="text-xs text-muted-foreground mt-3">
+                      Sign in to save import history and enrich metadata securely.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border-border/60 bg-card/70">
+                <CardContent className="p-6">
+                  <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Import history</div>
+                  <div className="flex items-center justify-between mt-2">
+                    <h3 className="font-display text-xl font-bold">Recent imports</h3>
+                    <div className="flex items-center gap-2">
+                      {confirmClearLogs ? (
+                        <>
+                          <Button size="sm" variant="destructive" onClick={clearImportLogs}>Confirm clear</Button>
+                          <Button size="sm" variant="ghost" onClick={() => setConfirmClearLogs(false)}>Cancel</Button>
+                        </>
+                      ) : (
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmClearLogs(true)}>Clear</Button>
+                      )}
+                    </div>
+                  </div>
+                  {loadingLogs ? (
+                    <p className="text-sm text-muted-foreground mt-4">Loading history...</p>
+                  ) : importLogs.length === 0 ? (
+                    <p className="text-sm text-muted-foreground mt-4">No imports yet. Upload a Goodreads CSV to see history.</p>
+                  ) : (
+                    <div className="mt-4 grid gap-3">
+                      {importLogs.map((log) => (
+                        <div key={log.id} className="rounded-lg border border-border/50 bg-background/70 p-3 text-sm">
+                          <div className="flex items-center justify-between text-xs text-muted-foreground">
+                            <span>{log.source.replace(/_/g, " ")}</span>
+                            <span>{new Date(log.created_at).toLocaleDateString()}</span>
+                          </div>
+                          <div className="mt-1">Added {log.added_count}, updated {log.updated_count}, failed {log.failed_count}</div>
+                          {log.failed_count > 0 && (
+                            <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                              {(log.failures || []).slice(0, 3).map((failure) => (
+                                <div key={failure}>- {failure}</div>
+                              ))}
+                              {log.failed_count > 3 && (
+                                <Button size="sm" variant="outline" className="mt-1" onClick={() => setSelectedFailures(log.failures || [])}>View all</Button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </section>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
 
       <Drawer open={!!selectedFailures} onOpenChange={(open) => !open && setSelectedFailures(null)}>
         <DrawerContent>
@@ -1187,6 +1269,8 @@ const Library = () => {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {displayedBooks.map((book, index) => {
+            const bookKey = getBookKey(book);
+            const normalizedStatus = normalizeStatus(book.status);
             const coverKey = book.title + "|" + book.author;
             const coverFailed = failedCovers.has(coverKey);
             const coverSrc = book.cover_url || book.thumbnail;
@@ -1238,8 +1322,15 @@ const Library = () => {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
-                      <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">
-                        {normalizeStatus(book.status).replace(/_/g, " ")}
+                      <div className="flex items-center gap-2">
+                        <StatusSelector
+                          value={normalizedStatus}
+                          onChange={(next) => updateBookStatus(book, next)}
+                          disabled={!!savingStatuses[bookKey]}
+                        />
+                        {savingStatuses[bookKey] && (
+                          <span className="text-[10px] text-muted-foreground">Saving...</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-1">
                         <Button variant="outline" size="sm" onClick={() => startEditing(index)}>Edit</Button>
@@ -1248,9 +1339,13 @@ const Library = () => {
                     </div>
                     <h3 className="font-display text-lg font-bold mt-1 truncate">{book.title}</h3>
                     <p className="text-sm text-muted-foreground font-body truncate">{book.author}</p>
-                    {book.rating && book.rating > 0 && (
-                      <div className="mt-1">{renderStars(book.rating)}</div>
-                    )}
+                    <div className="mt-2">
+                      <StarRating
+                        value={book.rating ?? null}
+                        onChange={(next) => updateBookRating(book, next)}
+                        saving={!!savingRatings[bookKey]}
+                      />
+                    </div>
                     <div className="text-xs text-muted-foreground font-body mt-2 flex flex-wrap gap-1">
                       {book.genre && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.genre}</span>}
                       {book.series_name && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.series_name}</span>}
@@ -1318,3 +1413,5 @@ const Library = () => {
 };
 
 export default Library;
+
+

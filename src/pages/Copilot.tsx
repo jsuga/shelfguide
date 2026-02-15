@@ -27,6 +27,7 @@ import {
   enqueueLibrarySync,
   flushAllPendingSync,
   getAuthenticatedUserId,
+  recordSyncError,
   retryAsync,
   upsertBooksToCloud,
 } from "@/lib/cloudSync";
@@ -41,6 +42,8 @@ type LibraryBook = {
   series_name: string | null;
   is_first_in_series: boolean;
   status: string;
+  rating?: number | null;
+  date_read?: string | null;
 };
 
 type Recommendation = {
@@ -113,6 +116,15 @@ const FALLBACK_CATALOG: Recommendation[] = [
 ];
 
 const normalize = (value: string) => value.trim().toLowerCase();
+const normalizeStatus = (raw: string | null | undefined): string => {
+  if (!raw) return "tbr";
+  const s = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["tbr", "to_read", "want_to_read"].includes(s)) return "tbr";
+  if (["reading", "currently_reading"].includes(s)) return "reading";
+  if (["read", "finished"].includes(s)) return "finished";
+  if (s === "paused") return "paused";
+  return s;
+};
 
 const getLocalBooks = (): LibraryBook[] => {
   const stored = localStorage.getItem(LIBRARY_KEY);
@@ -144,14 +156,118 @@ const derivePromptTags = (prompt: string, selected: string[]) => {
 const buildProfile = (books: LibraryBook[]) => {
   const genreCounts: Record<string, number> = {};
   const authorCounts: Record<string, number> = {};
+  const avoidGenres: Record<string, number> = {};
+  const avoidAuthors: Record<string, number> = {};
+
   books.forEach((book) => {
-    const weight = STATUS_WEIGHT[book.status] ?? 1;
-    if (book.genre) { const key = normalize(book.genre); genreCounts[key] = (genreCounts[key] ?? 0) + weight; }
-    if (book.author) { const key = normalize(book.author); authorCounts[key] = (authorCounts[key] ?? 0) + weight; }
+    const normalizedStatus = normalizeStatus(book.status);
+    const statusWeight = STATUS_WEIGHT[normalizedStatus] ?? 1;
+    const ratingWeight =
+      typeof book.rating === "number"
+        ? book.rating >= 4
+          ? 2.2
+          : book.rating >= 3
+          ? 1.2
+          : book.rating <= 2
+          ? 0.4
+          : 1
+        : 1;
+    const weight = statusWeight * ratingWeight;
+
+    if (book.genre) {
+      const key = normalize(book.genre);
+      genreCounts[key] = (genreCounts[key] ?? 0) + weight;
+      if (typeof book.rating === "number" && book.rating <= 2) {
+        avoidGenres[key] = (avoidGenres[key] ?? 0) + 1;
+      }
+    }
+    if (book.author) {
+      const key = normalize(book.author);
+      authorCounts[key] = (authorCounts[key] ?? 0) + weight;
+      if (typeof book.rating === "number" && book.rating <= 2) {
+        avoidAuthors[key] = (avoidAuthors[key] ?? 0) + 1;
+      }
+    }
   });
   const sortTop = (map: Record<string, number>, limit = 3) =>
     Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([key, value]) => ({ key, value }));
-  return { topGenres: sortTop(genreCounts), topAuthors: sortTop(authorCounts) };
+  return {
+    topGenres: sortTop(genreCounts),
+    topAuthors: sortTop(authorCounts),
+    avoidGenres: sortTop(avoidGenres, 3),
+    avoidAuthors: sortTop(avoidAuthors, 3),
+  };
+};
+
+type TasteSummary = {
+  hasRatings: boolean;
+  topRatedGenres: Array<{ key: string; value: number }>;
+  topRatedAuthors: Array<{ key: string; value: number }>;
+  recentFinished: Array<{ title: string; author: string; rating: number | null }>;
+  avoidGenres: Array<{ key: string; value: number }>;
+  avoidAuthors: Array<{ key: string; value: number }>;
+  statusDist: Record<string, number>;
+  fallbackGenres: Array<{ key: string; value: number }>;
+};
+
+const buildTasteSummary = (books: LibraryBook[]): TasteSummary => {
+  const rated = books.filter((b) => typeof b.rating === "number" && b.rating > 0);
+  const topRated = rated.filter((b) => (b.rating ?? 0) >= 4);
+  const lowRated = rated.filter((b) => (b.rating ?? 0) <= 2);
+  const statusDist: Record<string, number> = {};
+  const fallbackGenreCounts: Record<string, number> = {};
+
+  books.forEach((book) => {
+    const statusKey = normalizeStatus(book.status);
+    statusDist[statusKey] = (statusDist[statusKey] ?? 0) + 1;
+    if (book.genre) {
+      const key = normalize(book.genre);
+      fallbackGenreCounts[key] = (fallbackGenreCounts[key] ?? 0) + 1;
+    }
+  });
+
+  const countTop = (items: LibraryBook[], field: "genre" | "author") => {
+    const map: Record<string, number> = {};
+    items.forEach((book) => {
+      const raw = field === "genre" ? book.genre : book.author;
+      if (!raw) return;
+      const key = normalize(raw);
+      const ratingWeight = (book.rating ?? 0) >= 4 ? 2 : 1;
+      map[key] = (map[key] ?? 0) + ratingWeight;
+    });
+    return Object.entries(map)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([key, value]) => ({ key, value }));
+  };
+
+  const recentFinished = books
+    .filter((b) => normalizeStatus(b.status) === "finished")
+    .slice(0, 6)
+    .sort((a, b) => {
+      const aDate = a.date_read ? new Date(a.date_read).getTime() : 0;
+      const bDate = b.date_read ? new Date(b.date_read).getTime() : 0;
+      return bDate - aDate;
+    })
+    .slice(0, 3)
+    .map((b) => ({ title: b.title, author: b.author, rating: b.rating ?? null }));
+
+  const avoidGenres = countTop(lowRated, "genre");
+  const avoidAuthors = countTop(lowRated, "author");
+
+  return {
+    hasRatings: rated.length > 0,
+    topRatedGenres: countTop(topRated, "genre"),
+    topRatedAuthors: countTop(topRated, "author"),
+    recentFinished,
+    avoidGenres,
+    avoidAuthors,
+    statusDist,
+    fallbackGenres: Object.entries(fallbackGenreCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([key, value]) => ({ key, value })),
+  };
 };
 
 const computeFeedbackWeights = (entries: FeedbackEntry[]): FeedbackWeights => {
@@ -179,7 +295,10 @@ const scoreFallback = (catalog: Recommendation[], books: LibraryBook[], feedback
       const feedbackBoost = (feedback.genres[genreKey] ?? 0) + (feedback.authors[authorKey] ?? 0);
       const moodBoost = book.tags.filter((tag) => promptTags.includes(tag)).length * 1.5;
       const diversityPenalty = profile.topGenres.some((e) => e.key === genreKey) ? (1 - surpriseBoost) * 1.5 : 0;
-      const score = genreWeight * 0.7 + authorWeight * 1.2 + feedbackBoost * 0.6 + moodBoost + Math.random() * 0.2 - diversityPenalty;
+      const avoidPenalty =
+        (profile.avoidGenres.some((e) => e.key === genreKey) ? 2 : 0) +
+        (profile.avoidAuthors.some((e) => e.key === authorKey) ? 2 : 0);
+      const score = genreWeight * 0.7 + authorWeight * 1.2 + feedbackBoost * 0.6 + moodBoost + Math.random() * 0.2 - diversityPenalty - avoidPenalty;
       return { book, score, reasons: ["A steady fallback pick based on your library.", "Matches the mood signals you provided."], why_new: "A balanced option outside your current shelf." };
     })
     .sort((a, b) => b.score - a.score)
@@ -206,6 +325,7 @@ const Copilot = () => {
 
   const promptTags = useMemo(() => derivePromptTags(prompt, selectedTags), [prompt, selectedTags]);
   const profile = useMemo(() => buildProfile(books), [books]);
+  const tasteSummary = useMemo(() => buildTasteSummary(books), [books]);
   const feedbackWeights = useMemo(() => computeFeedbackWeights(feedbackEntries), [feedbackEntries]);
 
   const loadBooks = async (userIdValue: string | null) => {
@@ -217,7 +337,12 @@ const Copilot = () => {
     );
     const { data, error } = result;
     setLoadingLibrary(false);
-    if (error) { setCloudNotice("Cloud sync is unavailable — using local-only data for now."); setBooks(getLocalBooks()); return; }
+    if (error) {
+      const syncError = await recordSyncError({ error, operation: "select", table: "books", userId: userIdValue });
+      setCloudNotice(syncError.userMessage || "Cloud sync is unavailable. Using local-only data for now.");
+      setBooks(getLocalBooks());
+      return;
+    }
     setCloudNotice(null);
     const cloudBooks = (data || []) as LibraryBook[];
     setBooks(cloudBooks);
@@ -240,7 +365,12 @@ const Copilot = () => {
       1, 350
     );
     const { data, error } = result;
-    if (error) { setCloudNotice("Feedback sync paused. Using local cache."); setFeedbackEntries(loadLocalFeedback()); return; }
+    if (error) {
+      const syncError = await recordSyncError({ error, operation: "select", table: "copilot_feedback", userId: userIdValue });
+      setCloudNotice(syncError.userMessage || "Feedback sync paused. Using local cache.");
+      setFeedbackEntries(loadLocalFeedback());
+      return;
+    }
     setFeedbackEntries((data || []) as FeedbackEntry[]);
   };
 
@@ -253,14 +383,22 @@ const Copilot = () => {
     );
     const { data, error } = result;
     setLoadingHistory(false);
-    if (error) { setCloudNotice("Recommendation history unavailable right now."); return; }
+    if (error) {
+      const syncError = await recordSyncError({ error, operation: "select", table: "copilot_recommendations", userId: userIdValue });
+      setCloudNotice(syncError.userMessage || "Recommendation history unavailable right now.");
+      return;
+    }
     setHistoryEntries((data || []) as HistoryEntry[]);
   };
 
   const clearHistory = async () => {
     if (!userId) { setHistoryEntries([]); return; }
     const { error } = await db.from("copilot_recommendations").delete().eq("user_id", userId);
-    if (error) { toast.error("Could not clear history."); return; }
+    if (error) {
+      await recordSyncError({ error, operation: "delete", table: "copilot_recommendations", userId });
+      toast.error("Could not clear history.");
+      return;
+    }
     setHistoryEntries([]);
     toast.success("Recommendation history cleared.");
   };
@@ -296,8 +434,24 @@ const Copilot = () => {
     setLoadingRecommendations(true);
     setStatusMessage(null);
     if (userId) {
+      const tastePayload = tasteSummary.hasRatings
+        ? {
+            topRatedGenres: tasteSummary.topRatedGenres.map((g) => g.key),
+            topRatedAuthors: tasteSummary.topRatedAuthors.map((a) => a.key),
+            recentFinished: tasteSummary.recentFinished.map((b) => ({
+              title: b.title,
+              author: b.author,
+              rating: b.rating,
+            })),
+            avoidGenres: tasteSummary.avoidGenres.map((g) => g.key),
+            avoidAuthors: tasteSummary.avoidAuthors.map((a) => a.key),
+          }
+        : {
+            statusDist: tasteSummary.statusDist,
+            fallbackGenres: tasteSummary.fallbackGenres.map((g) => g.key),
+          };
       const { data, error } = await supabase.functions.invoke("reading-copilot", {
-        body: { prompt, tags: promptTags, surprise, limit: 4 },
+        body: { prompt, tags: promptTags, surprise, limit: 4, taste: tastePayload },
       });
       if (error || !data) {
         // Classify the error for a helpful message
@@ -335,6 +489,7 @@ const Copilot = () => {
       if (!entry.title || !entry.decision) { setCloudNotice("Feedback missing required fields; not queued."); return; }
       const { error } = await db.from("copilot_feedback").insert([{ ...entry, user_id: userId }]);
       if (error) {
+        await recordSyncError({ error, operation: "insert", table: "copilot_feedback", userId });
         const next = [entry, ...feedbackEntries].slice(0, 50);
         setFeedbackEntries(next); saveLocalFeedback(next);
         enqueueFeedbackSync(userId, entry);
@@ -358,7 +513,8 @@ const Copilot = () => {
     if (userId) {
       const { error } = await upsertBooksToCloud(userId, [newBook]);
       if (error) {
-        toast.error(`Could not add to cloud library: ${error.message}. Queued for retry.`);
+        const syncError = await recordSyncError({ error, operation: "upsert", table: "books", userId });
+        toast.error(`Could not add to cloud library: ${syncError.userMessage || syncError.message}. Queued for retry.`);
         const nextBooks = [newBook, ...books]; setBooks(nextBooks); setLocalBooks(nextBooks);
         enqueueLibrarySync(userId, [newBook], "copilot_add_to_library");
         setCloudNotice("Library change queued for cloud sync.");
@@ -380,7 +536,11 @@ const Copilot = () => {
   const resetFeedback = async () => {
     if (userId) {
       const { error } = await db.from("copilot_feedback").delete().eq("user_id", userId);
-      if (error) { toast.error("Could not clear feedback."); return; }
+      if (error) {
+        await recordSyncError({ error, operation: "delete", table: "copilot_feedback", userId });
+        toast.error("Could not clear feedback.");
+        return;
+      }
     }
     setFeedbackEntries([]); saveLocalFeedback([]);
     toast.success("Feedback cleared.");
@@ -439,9 +599,60 @@ const Copilot = () => {
               <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-muted-foreground font-body"><BookOpen className="h-4 w-4" />Library signals</div>
               <p className="mt-2 text-sm font-body">{loadingLibrary ? "Loading your library signals..." : `Books tracked: ${books.length}`}</p>
               <div className="mt-3 flex flex-wrap gap-2">
-                {profile.topGenres.length > 0 ? profile.topGenres.map((g) => <Badge key={g.key} variant="secondary">{g.key.replace(/_/g, " ")}</Badge>) : <span className="text-xs text-muted-foreground">Add books to improve recommendations.</span>}
+                {tasteSummary.hasRatings ? (
+                  tasteSummary.topRatedGenres.length > 0 ? (
+                    tasteSummary.topRatedGenres.map((g) => (
+                      <Badge key={`rated-genre-${g.key}`} variant="secondary">{g.key.replace(/_/g, " ")}</Badge>
+                    ))
+                  ) : (
+                    <span className="text-xs text-muted-foreground">Rate a few books to build a taste profile.</span>
+                  )
+                ) : (
+                  profile.topGenres.length > 0 ? (
+                    profile.topGenres.map((g) => <Badge key={g.key} variant="secondary">{g.key.replace(/_/g, " ")}</Badge>)
+                  ) : (
+                    <span className="text-xs text-muted-foreground">Add books to improve recommendations.</span>
+                  )
+                )}
               </div>
-              {profile.topAuthors.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{profile.topAuthors.map((a) => <Badge key={a.key} variant="outline">{a.key}</Badge>)}</div>}
+              {tasteSummary.hasRatings && tasteSummary.topRatedAuthors.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {tasteSummary.topRatedAuthors.map((a) => (
+                    <Badge key={`rated-author-${a.key}`} variant="outline">{a.key}</Badge>
+                  ))}
+                </div>
+              )}
+              {!tasteSummary.hasRatings && profile.topAuthors.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {profile.topAuthors.map((a) => <Badge key={a.key} variant="outline">{a.key}</Badge>)}
+                </div>
+              )}
+              {tasteSummary.hasRatings && tasteSummary.recentFinished.length > 0 && (
+                <div className="mt-3 grid gap-1 text-xs text-muted-foreground">
+                  <div className="text-[10px] uppercase tracking-[0.2em]">Recent finishes</div>
+                  {tasteSummary.recentFinished.map((entry) => (
+                    <div key={`${entry.title}-${entry.author}`} className="flex justify-between">
+                      <span className="truncate">{entry.title}</span>
+                      <span>{entry.rating ? `${entry.rating}/5` : "unrated"}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {tasteSummary.hasRatings && (tasteSummary.avoidGenres.length > 0 || tasteSummary.avoidAuthors.length > 0) && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {tasteSummary.avoidGenres.map((g) => (
+                    <Badge key={`avoid-genre-${g.key}`} variant="destructive">{g.key.replace(/_/g, " ")}</Badge>
+                  ))}
+                  {tasteSummary.avoidAuthors.map((a) => (
+                    <Badge key={`avoid-author-${a.key}`} variant="destructive">{a.key}</Badge>
+                  ))}
+                </div>
+              )}
+              {!tasteSummary.hasRatings && Object.keys(tasteSummary.statusDist).length > 0 && (
+                <div className="mt-3 text-xs text-muted-foreground">
+                  Status mix: {Object.entries(tasteSummary.statusDist).map(([key, value]) => `${key} ${value}`).join(" | ")}
+                </div>
+              )}
             </CardContent></Card>
             <Card className="border-border/60 bg-background/70"><CardContent className="p-4">
               <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-muted-foreground font-body"><ThumbsUp className="h-4 w-4" />Feedback signals</div>

@@ -85,6 +85,9 @@ VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_PUBLISHABLE_KEY=your_anon_key
 ```
 
+Lovable deploy checklist:
+- Ensure `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` are set in the Lovable environment. Missing values force local-only mode and trigger a cloud sync unavailable banner.
+
 Password recovery uses a dedicated reset route:
 
 - App route: `/reset-password`
@@ -332,12 +335,17 @@ Go to **My Library** and use the **Goodreads Import** card to upload the CSV. Th
 - `currently-reading` -> `reading`
 - `read` -> `finished`
 
-Duplicates are merged by ISBN/ISBN13 (preferred) or Title+Author.
+Duplicates are merged by stable key in this order:
+
+- `isbn13`
+- `isbn` (ISBN10 fallback)
+- normalized `title + author + published_year`
 
 Cloud import writes are upsert-based and deduped by `books.dedupe_key`:
 
-- If ISBN13 exists: dedupe by `user_id + isbn13`
-- Otherwise: dedupe by `user_id + normalized(title|author)`
+- If ISBN13 exists: `isbn13:<isbn13>`
+- Else if ISBN10 exists: `isbn10:<isbn10>`
+- Else: `title_author_year:<normalized_title>|<normalized_author>|<published_year_or_unknown>`
 
 If cloud write fails, import data is queued locally and retried in the background; you can also trigger retry manually from **Preferences -> Sync Status**.
 
@@ -365,7 +373,8 @@ If cloud write fails, import data is queued locally and retried in the backgroun
 - Dedupe normalization is centralized in `src/lib/bookDedupe.ts`.
 - Key format:
   - `isbn13:<isbn13>` when ISBN13 is present
-  - `title_author:<normalized_title>|<normalized_author>` otherwise
+  - `isbn10:<isbn10>` when ISBN10 is present and ISBN13 is absent
+  - `title_author_year:<normalized_title>|<normalized_author>|<published_year_or_unknown>` otherwise
 - Used across manual CSV import, Goodreads import merge, demo seed checks, and add-to-library flows.
 
 ### Database dedupe enforcement
@@ -373,6 +382,31 @@ If cloud write fails, import data is queued locally and retried in the backgroun
 - Migration: `supabase/migrations/20260212183000_books_dedupe_key_upsert.sql`
 - Adds generated `books.dedupe_key` and unique index `(user_id, dedupe_key)`.
 - Cloud writes use upsert conflict target `user_id,dedupe_key`.
+- Dedupe expression was upgraded in `supabase/migrations/20260215123000_books_sync_cover_dedupe_upgrade.sql`.
+
+## Session 6.2 Production Fixes
+
+- Auth routing:
+  - Authenticated users now default to **My Library** when landing on `/`.
+  - Deep links are preserved (no forced redirect away from non-root routes).
+- Password recovery:
+  - Added **Forgot password?** in Sign In dialog.
+  - Added reset route: `/reset-password`.
+  - Recovery flow uses Supabase `resetPasswordForEmail` with `redirectTo=<origin>/reset-password`.
+- Goodreads import reliability:
+  - Required header validation (`Title`, `Author`) with actionable errors.
+  - Progress status and completion summary (`rows read/created/updated/skipped/errors`).
+  - Shelf mapping includes `Exclusive Shelf` and `Bookshelves`.
+  - Date parsing normalized to ISO date where valid.
+- Cover persistence + flicker fixes:
+  - Covers persist server-side via `books.cover_url` (legacy `thumbnail` kept in sync).
+  - Cover enrichment now uses in-memory + local cache, ISBN-first keys, inflight de-dupe, and request throttling.
+  - Cover load failures are logged and persisted via `books.cover_failed_at`.
+- Schema/migration:
+  - Added `supabase/migrations/20260215123000_books_sync_cover_dedupe_upgrade.sql` for:
+    - `published_year`, `cover_url`, `cover_source`, `cover_failed_at`, `updated_at`
+    - safer cover-preserving update trigger
+    - upgraded dedupe key expression and unique index refresh
 
 ### Diagnostics (dev/flagged)
 

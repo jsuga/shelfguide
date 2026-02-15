@@ -28,6 +28,7 @@ export type CloudBookUpsert = {
   cover_source?: string | null;
   cover_failed_at?: string | null;
   source?: string | null;
+  explicit_nulls?: Array<"rating">;
 };
 
 export type FeedbackQueueEntry = {
@@ -47,6 +48,7 @@ type LibrarySyncTask = {
   status: "pending" | "needs_attention";
   attempt_count: number;
   last_error: string | null;
+  last_error_class?: SyncErrorClass | null;
   last_attempt_at: string | null;
   source: string;
   fileName?: string;
@@ -61,6 +63,7 @@ type FeedbackSyncTask = {
   status: "pending" | "needs_attention";
   attempt_count: number;
   last_error: string | null;
+  last_error_class?: SyncErrorClass | null;
   last_attempt_at: string | null;
   entry: FeedbackQueueEntry;
   created_at: string;
@@ -75,16 +78,37 @@ export type NeedsAttentionItem = {
   created_at: string;
 };
 
-export type SyncErrorClass = "network" | "auth" | "permission" | "other";
+export type SyncErrorClass =
+  | "network"
+  | "auth"
+  | "permission"
+  | "schema_cache"
+  | "missing_table"
+  | "project_mismatch"
+  | "other";
 
 export type LastSyncError = {
   message: string;
   errorClass: SyncErrorClass;
   timestamp: string;
+  operation?: string;
+  table?: string;
+  code?: string | null;
+  details?: string | null;
+  hint?: string | null;
+  status?: number | null;
+  projectRef?: string | null;
+  userId?: string | null;
+  hasSession?: boolean;
+  userMessage?: string | null;
+  actionHint?: string | null;
 };
 
 const classifyError = (msg: string): SyncErrorClass => {
   const lower = msg.toLowerCase();
+  if (lower.includes("schema cache")) return "schema_cache";
+  if (lower.includes("could not find the table") || lower.includes("relation") && lower.includes("does not exist"))
+    return "missing_table";
   if (lower.includes("fetch") || lower.includes("network") || lower.includes("offline") || lower.includes("failed to fetch"))
     return "network";
   if (lower.includes("401") || lower.includes("403") || lower.includes("auth") || lower.includes("jwt") || lower.includes("token"))
@@ -94,17 +118,56 @@ const classifyError = (msg: string): SyncErrorClass => {
   return "other";
 };
 
-export const setLastSyncError = (message: string) => {
-  const entry: LastSyncError = {
-    message,
-    errorClass: classifyError(message),
-    timestamp: new Date().toISOString(),
-  };
+export const getSupabaseProjectRef = () => {
+  const url = import.meta.env.VITE_SUPABASE_URL || "";
+  try {
+    const hostname = new URL(url).hostname;
+    const [projectRef] = hostname.split(".");
+    return projectRef || null;
+  } catch {
+    return null;
+  }
+};
+
+const buildUserMessage = (errorClass: SyncErrorClass, projectRef: string | null) => {
+  switch (errorClass) {
+    case "schema_cache":
+      return "Supabase schema cache needs refresh. Run NOTIFY pgrst, 'reload schema'; in the Supabase SQL Editor, then retry.";
+    case "missing_table":
+    case "project_mismatch":
+      return `Connected to Supabase project ${projectRef || "(unknown)"} but books table missing. Check VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY in local + Lovable env.`;
+    case "auth":
+      return "Session expired. Please sign in again.";
+    case "permission":
+      return "RLS blocked this operation. Check policies for public.books.";
+    case "network":
+      return "Network error. Check your connection and retry.";
+    default:
+      return "Cloud sync is unavailable. Using local-only data for now.";
+  }
+};
+
+const buildActionHint = (errorClass: SyncErrorClass) => {
+  if (errorClass === "schema_cache") {
+    return "Supabase SQL Editor: NOTIFY pgrst, 'reload schema'; if it persists, verify VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.";
+  }
+  if (errorClass === "missing_table" || errorClass === "project_mismatch") {
+    return "Verify VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set for this environment.";
+  }
+  if (errorClass === "permission") {
+    return "Ensure RLS policies allow auth.uid() = user_id for select/insert/update/delete.";
+  }
+  return null;
+};
+
+export const setLastSyncError = (entry: LastSyncError) => {
   localStorage.setItem(LAST_SYNC_ERROR_KEY, JSON.stringify(entry));
+  window.dispatchEvent(new Event(SYNC_EVENT));
 };
 
 export const clearLastSyncError = () => {
   localStorage.removeItem(LAST_SYNC_ERROR_KEY);
+  window.dispatchEvent(new Event(SYNC_EVENT));
 };
 
 export const getLastSyncError = (): LastSyncError | null => {
@@ -115,6 +178,52 @@ export const getLastSyncError = (): LastSyncError | null => {
   } catch {
     return null;
   }
+};
+
+export const recordSyncError = async (params: {
+  error: any;
+  operation: string;
+  table?: string;
+  userId?: string | null;
+}) => {
+  const error = params.error || {};
+  const message = (error?.message || error || "Unknown error").toString();
+  const lower = `${message} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  const projectRef = getSupabaseProjectRef();
+  let errorClass = classifyError(message);
+  if (errorClass === "missing_table" && lower.includes("public.books")) {
+    errorClass = "project_mismatch";
+  }
+  const entry: LastSyncError = {
+    message,
+    errorClass,
+    timestamp: new Date().toISOString(),
+    operation: params.operation,
+    table: params.table,
+    code: error?.code ?? null,
+    details: error?.details ?? null,
+    hint: error?.hint ?? null,
+    status: error?.status ?? error?.statusCode ?? null,
+    projectRef,
+    userId: params.userId ?? null,
+    hasSession: !!(await supabase.auth.getSession()).data.session,
+    userMessage: buildUserMessage(errorClass, projectRef),
+    actionHint: buildActionHint(errorClass),
+  };
+  setLastSyncError(entry);
+  console.error("[ShelfGuide] Cloud sync error:", {
+    operation: entry.operation,
+    table: entry.table,
+    message: entry.message,
+    code: entry.code,
+    details: entry.details,
+    hint: entry.hint,
+    status: entry.status,
+    projectRef: entry.projectRef,
+    userId: entry.userId,
+    hasSession: entry.hasSession,
+  });
+  return entry;
 };
 
 const readJson = <T>(key: string): T[] => {
@@ -146,6 +255,7 @@ const readLibraryQueue = () =>
         ? Number(task.attempt_count)
         : 0,
     last_error: task.user_id == null ? ORPHANED_QUEUE_ERROR : task.last_error ?? null,
+    last_error_class: task.last_error_class ?? null,
     last_attempt_at: task.last_attempt_at ?? null,
     source: task.source || "library_sync",
     fileName: task.fileName,
@@ -172,6 +282,7 @@ const readFeedbackQueue = () =>
         ? Number(task.attempt_count)
         : 0,
     last_error: task.user_id == null ? ORPHANED_QUEUE_ERROR : task.last_error ?? null,
+    last_error_class: task.last_error_class ?? null,
     last_attempt_at: task.last_attempt_at ?? null,
     entry:
       task.entry ||
@@ -273,6 +384,25 @@ export const retryAsync = async <T>(
   throw lastThrownError;
 };
 
+const computeBackoffMs = (attempt: number, errorClass: SyncErrorClass | null | undefined) => {
+  if (!errorClass) return 0;
+  if (errorClass === "schema_cache" || errorClass === "missing_table" || errorClass === "project_mismatch") {
+    return Math.min(1000 * 60 * 10, 1200 * Math.pow(2, Math.max(0, attempt)));
+  }
+  if (errorClass === "network") {
+    return Math.min(1000 * 60 * 5, 800 * Math.pow(2, Math.max(0, attempt)));
+  }
+  return 0;
+};
+
+const shouldDeferRetry = (task: { last_attempt_at: string | null; attempt_count: number; last_error_class?: SyncErrorClass | null }) => {
+  const delay = computeBackoffMs(task.attempt_count, task.last_error_class);
+  if (!delay) return false;
+  if (!task.last_attempt_at) return false;
+  const elapsed = Date.now() - new Date(task.last_attempt_at).getTime();
+  return elapsed < delay;
+};
+
 export const getAuthenticatedUserId = async () => {
   const { data: sessionData } = await supabase.auth.getSession();
   const fromSession = sessionData.session?.user?.id;
@@ -303,6 +433,12 @@ export const upsertBooksToCloud = async (userId: string, books: CloudBookUpsert[
     // Avoid clearing server-side values on partial updates.
     if (next.cover_url === null) delete next.cover_url;
     if (next.thumbnail === null) delete next.thumbnail;
+    const allowNullRating = Array.isArray(book.explicit_nulls) && book.explicit_nulls.includes("rating");
+    if (!allowNullRating && (next.rating === null || typeof next.rating === "undefined")) {
+      delete next.rating;
+    }
+    if (next.status == null) delete next.status;
+    delete (next as Record<string, unknown>).explicit_nulls;
     return next;
   });
   return (supabase as any)
@@ -325,6 +461,7 @@ export const enqueueLibrarySync = (
       status: "pending" as const,
       attempt_count: 0,
       last_error: null,
+      last_error_class: null,
       last_attempt_at: null,
       source,
       fileName,
@@ -346,6 +483,7 @@ export const enqueueFeedbackSync = (userId: string | null, entry: FeedbackQueueE
       status: "pending" as const,
       attempt_count: 0,
       last_error: null,
+      last_error_class: null,
       last_attempt_at: null,
       entry,
       created_at: new Date().toISOString(),
@@ -376,20 +514,31 @@ export const flushLibraryQueue = async (userId: string) => {
       });
       continue;
     }
+    if (shouldDeferRetry(task)) {
+      remaining.push(task);
+      continue;
+    }
     const result = await retryAsync(() => upsertBooksToCloud(userId, task.books), 1, 450);
     const error = (result as any)?.error;
     if (error) {
+      const syncError = await recordSyncError({
+        error,
+        operation: "upsert",
+        table: "books",
+        userId,
+      });
+      const message = error?.message || "Unknown error";
       const nextAttempt = task.attempt_count + 1;
       remaining.push({
         ...task,
         attempt_count: nextAttempt,
-        last_error: error.message,
+        last_error: message,
+        last_error_class: syncError.errorClass,
         last_attempt_at: new Date().toISOString(),
         status: (nextAttempt >= MAX_SYNC_ATTEMPTS ? "needs_attention" : "pending") as "pending" | "needs_attention",
       });
       failed += 1;
-      errorMessages.push(error.message);
-      setLastSyncError(error.message);
+      errorMessages.push(message);
       continue;
     }
     synced += task.books.length;
@@ -421,11 +570,16 @@ export const flushFeedbackQueue = async (userId: string) => {
       });
       continue;
     }
+    if (shouldDeferRetry(task)) {
+      remaining.push(task);
+      continue;
+    }
     if (!task.entry.title || !task.entry.decision) {
       remaining.push({
         ...task,
         attempt_count: MAX_SYNC_ATTEMPTS,
         last_error: "Missing required feedback fields.",
+        last_error_class: "other",
         last_attempt_at: new Date().toISOString(),
         status: "needs_attention" as const,
       });
@@ -446,17 +600,24 @@ export const flushFeedbackQueue = async (userId: string) => {
     );
     const error = (result as any)?.error;
     if (error) {
+      const syncError = await recordSyncError({
+        error,
+        operation: "insert",
+        table: "copilot_feedback",
+        userId,
+      });
+      const message = error?.message || "Unknown error";
       const nextAttempt = task.attempt_count + 1;
       remaining.push({
         ...task,
         attempt_count: nextAttempt,
-        last_error: error.message,
+        last_error: message,
+        last_error_class: syncError.errorClass,
         last_attempt_at: new Date().toISOString(),
         status: (nextAttempt >= MAX_SYNC_ATTEMPTS ? "needs_attention" : "pending") as "pending" | "needs_attention",
       });
       failed += 1;
-      errorMessages.push(error.message);
-      setLastSyncError(error.message);
+      errorMessages.push(message);
       continue;
     }
     synced += 1;
@@ -481,6 +642,22 @@ export const flushAllPendingSync = async () => {
     failed: library.failed + feedback.failed,
     errorMessages: [...library.errorMessages, ...feedback.errorMessages],
   };
+};
+
+export const checkCloudHealth = async (userId: string | null) => {
+  if (!userId) return { ok: false, reason: "not_authenticated" as const };
+  const result: any = await retryAsync(
+    () => (supabase as any).from("books").select("id").limit(1),
+    1,
+    250
+  );
+  const { error } = result || {};
+  if (error) {
+    await recordSyncError({ error, operation: "select", table: "books", userId });
+    return { ok: false, reason: "error" as const, error };
+  }
+  clearLastSyncError();
+  return { ok: true as const };
 };
 
 export const clearNeedsAttentionItems = (userId: string | null) => {
