@@ -18,6 +18,7 @@ import type { GenreTheme } from "@/contexts/theme-types";
 import { themeOptions } from "@/contexts/theme-types";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import PasswordResetResend from "@/components/auth/PasswordResetResend";
 
 const navLinks = [
   { path: "/", label: "How it Works" },
@@ -37,7 +38,7 @@ const Navbar = () => {
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authUsername, setAuthUsername] = useState("");
-  const [resettingPassword, setResettingPassword] = useState(false);
+  const [showResetPanel, setShowResetPanel] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const { theme, setTheme } = useTheme();
 
@@ -55,6 +56,14 @@ const Navbar = () => {
       listener.subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!authOpen) setShowResetPanel(false);
+  }, [authOpen]);
+
+  useEffect(() => {
+    if (authMode !== "sign_in") setShowResetPanel(false);
+  }, [authMode]);
 
   const handleAuth = async () => {
     if (!authEmail || !authPassword) {
@@ -95,23 +104,6 @@ const Navbar = () => {
     navigate("/library", { replace: false });
   };
 
-  const handleForgotPassword = async () => {
-    if (!authEmail.trim()) {
-      toast.error("Enter your email first, then click Forgot password.");
-      return;
-    }
-    setResettingPassword(true);
-    const redirectTo = `${window.location.origin}/reset-password`;
-    const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), {
-      redirectTo,
-    });
-    setResettingPassword(false);
-    if (error) {
-      toast.error(`Could not send reset email: ${error.message}`);
-      return;
-    }
-    toast.success("Password reset email sent. Check your inbox.");
-  };
 
   const handleHeaderAuthClick = async () => {
     if (isAuthenticated) {
@@ -277,17 +269,26 @@ const Navbar = () => {
                   onChange={(event) => setAuthPassword(event.target.value)}
                   placeholder="At least 8 characters"
                 />
-                {authMode === "sign_in" && (
+                {authMode === "sign_in" && !showResetPanel && (
                   <button
                     type="button"
-                    onClick={() => void handleForgotPassword()}
-                    disabled={resettingPassword}
+                    onClick={() => setShowResetPanel(true)}
                     className="text-left text-xs text-primary hover:text-primary/80 disabled:text-muted-foreground"
                   >
-                    {resettingPassword ? "Sending reset email..." : "Forgot password?"}
+                    Forgot password?
                   </button>
                 )}
               </div>
+
+              {authMode === "sign_in" && showResetPanel && (
+                <div className="rounded-lg border border-border/60 bg-background/70 p-4">
+                  <PasswordResetResend
+                    defaultEmail={authEmail}
+                    onBackToSignIn={() => setShowResetPanel(false)}
+                    backToSignInLabel="Back to sign in"
+                  />
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-3">
                 <Button variant="outline" onClick={() => setAuthOpen(false)}>

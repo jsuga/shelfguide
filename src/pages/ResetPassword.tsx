@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import PasswordResetResend from "@/components/auth/PasswordResetResend";
 
 const ResetPassword = () => {
   const navigate = useNavigate();
@@ -14,6 +15,28 @@ const ResetPassword = () => {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
+  const [errorParams, setErrorParams] = useState<{
+    error?: string | null;
+    errorCode?: string | null;
+    errorDescription?: string | null;
+  }>({});
+
+  useEffect(() => {
+    const parseParams = () => {
+      const search = new URLSearchParams(window.location.search);
+      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const getValue = (key: string) => hash.get(key) || search.get(key);
+      setErrorParams({
+        error: getValue("error"),
+        errorCode: getValue("error_code"),
+        errorDescription: getValue("error_description"),
+      });
+    };
+    parseParams();
+    const onHashChange = () => parseParams();
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -44,6 +67,17 @@ const ResetPassword = () => {
     if (confirmPassword && password !== confirmPassword) return "Passwords do not match.";
     return null;
   }, [password, confirmPassword]);
+
+  const isExpiredLink =
+    errorParams.errorCode === "otp_expired" || errorParams.error === "access_denied";
+  const hasAnyError = Boolean(errorParams.errorCode || errorParams.error);
+  const showResendUI = isExpiredLink || hasAnyError;
+  const showPasswordForm = sessionReady && !showResendUI;
+
+  const resendTitle = isExpiredLink ? "Link expired" : "Reset link issue";
+  const resendMessageText = isExpiredLink
+    ? "That password reset link is invalid or has expired."
+    : "We couldn't verify that password reset link.";
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -78,50 +112,69 @@ const ResetPassword = () => {
               <LockKeyhole className="h-4 w-4" />
               Account recovery
             </div>
-            <h1 className="font-display text-3xl font-bold mt-3">Reset your password</h1>
+            <h1 className="font-display text-3xl font-bold mt-3">
+              {showResendUI ? resendTitle : "Reset your password"}
+            </h1>
             <p className="text-sm text-muted-foreground mt-2 font-body">
-              Enter a new password for your ShelfGuide account.
+              {showResendUI
+                ? resendMessageText
+                : "Enter a new password for your ShelfGuide account."}
             </p>
 
-            <form onSubmit={(e) => void handleSubmit(e)} className="mt-6 grid gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="new-password">New password</Label>
-                <Input
-                  id="new-password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="At least 8 characters"
-                  autoComplete="new-password"
+            {showResendUI ? (
+              <div className="mt-6 grid gap-4">
+                {errorParams.errorDescription && (
+                  <p className="text-xs text-muted-foreground">
+                    {errorParams.errorDescription.replace(/\+/g, " ")}
+                  </p>
+                )}
+
+                <PasswordResetResend
+                  onBackToSignIn={() => navigate("/", { replace: true })}
+                  primaryLabel="Send new reset email"
                 />
               </div>
+            ) : (
+              <form onSubmit={(e) => void handleSubmit(e)} className="mt-6 grid gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="new-password">New password</Label>
+                  <Input
+                    id="new-password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="At least 8 characters"
+                    autoComplete="new-password"
+                  />
+                </div>
 
-              <div className="grid gap-2">
-                <Label htmlFor="confirm-password">Confirm password</Label>
-                <Input
-                  id="confirm-password"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Re-enter your password"
-                  autoComplete="new-password"
-                />
-              </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="confirm-password">Confirm password</Label>
+                  <Input
+                    id="confirm-password"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Re-enter your password"
+                    autoComplete="new-password"
+                  />
+                </div>
 
-              {validationMessage && (
-                <p className="text-xs text-destructive">{validationMessage}</p>
-              )}
+                {validationMessage && (
+                  <p className="text-xs text-destructive">{validationMessage}</p>
+                )}
 
-              {!sessionReady && (
-                <p className="text-xs text-muted-foreground">
-                  Open this page from your password reset email link to continue.
-                </p>
-              )}
+                {!sessionReady && (
+                  <p className="text-xs text-muted-foreground">
+                    Open this page from your password reset email link to continue.
+                  </p>
+                )}
 
-              <Button type="submit" disabled={submitting || !sessionReady || Boolean(validationMessage)}>
-                {submitting ? "Updating..." : "Update password"}
-              </Button>
-            </form>
+                <Button type="submit" disabled={submitting || !sessionReady || Boolean(validationMessage)}>
+                  {submitting ? "Updating..." : "Update password"}
+                </Button>
+              </form>
+            )}
           </CardContent>
         </Card>
       </div>
