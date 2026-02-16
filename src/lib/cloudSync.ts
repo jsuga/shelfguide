@@ -111,11 +111,22 @@ export type LastSyncError = {
 const classifyError = (msg: string): SyncErrorClass => {
   const lower = msg.toLowerCase();
   if (lower.includes("schema cache")) return "schema_cache";
-  if (lower.includes("could not find the table") || lower.includes("relation") && lower.includes("does not exist"))
+  if (lower.includes("could not find the table") || (lower.includes("relation") && lower.includes("does not exist")))
     return "missing_table";
-  if (lower.includes("fetch") || lower.includes("network") || lower.includes("offline") || lower.includes("failed to fetch"))
+  if (
+    lower.includes("fetch") ||
+    lower.includes("network") ||
+    lower.includes("offline") ||
+    lower.includes("failed to fetch")
+  )
     return "network";
-  if (lower.includes("401") || lower.includes("403") || lower.includes("auth") || lower.includes("jwt") || lower.includes("token"))
+  if (
+    lower.includes("401") ||
+    lower.includes("403") ||
+    lower.includes("auth") ||
+    lower.includes("jwt") ||
+    lower.includes("token")
+  )
     return "auth";
   if (lower.includes("rls") || lower.includes("permission") || lower.includes("policy") || lower.includes("row-level"))
     return "permission";
@@ -230,7 +241,7 @@ export const recordSyncError = async (params: {
   return entry;
 };
 
-const readJson = <T>(key: string): T[] => {
+const readJson = <T,>(key: string): T[] => {
   const raw = localStorage.getItem(key);
   if (!raw) return [];
   try {
@@ -245,20 +256,14 @@ const readLibraryQueue = () =>
     user_id: task.user_id ?? null,
     id: task.id || nextId(),
     operation: "library_upsert" as const,
-    status: (
-      task.user_id == null
+    status: (task.user_id == null
+      ? "needs_attention"
+      : task.status === "needs_attention"
         ? "needs_attention"
-        : task.status === "needs_attention"
-        ? "needs_attention"
-        : "pending"
-    ) as "pending" | "needs_attention",
+        : "pending") as "pending" | "needs_attention",
     attempt_count:
-      task.user_id == null
-        ? MAX_SYNC_ATTEMPTS
-        : Number.isFinite(task.attempt_count)
-        ? Number(task.attempt_count)
-        : 0,
-    last_error: task.user_id == null ? ORPHANED_QUEUE_ERROR : task.last_error ?? null,
+      task.user_id == null ? MAX_SYNC_ATTEMPTS : Number.isFinite(task.attempt_count) ? Number(task.attempt_count) : 0,
+    last_error: task.user_id == null ? ORPHANED_QUEUE_ERROR : (task.last_error ?? null),
     last_error_class: task.last_error_class ?? null,
     last_attempt_at: task.last_attempt_at ?? null,
     source: task.source || "library_sync",
@@ -272,20 +277,14 @@ const readFeedbackQueue = () =>
     user_id: task.user_id ?? null,
     id: task.id || nextId(),
     operation: "feedback_insert" as const,
-    status: (
-      task.user_id == null
+    status: (task.user_id == null
+      ? "needs_attention"
+      : task.status === "needs_attention"
         ? "needs_attention"
-        : task.status === "needs_attention"
-        ? "needs_attention"
-        : "pending"
-    ) as "pending" | "needs_attention",
+        : "pending") as "pending" | "needs_attention",
     attempt_count:
-      task.user_id == null
-        ? MAX_SYNC_ATTEMPTS
-        : Number.isFinite(task.attempt_count)
-        ? Number(task.attempt_count)
-        : 0,
-    last_error: task.user_id == null ? ORPHANED_QUEUE_ERROR : task.last_error ?? null,
+      task.user_id == null ? MAX_SYNC_ATTEMPTS : Number.isFinite(task.attempt_count) ? Number(task.attempt_count) : 0,
+    last_error: task.user_id == null ? ORPHANED_QUEUE_ERROR : (task.last_error ?? null),
     last_error_class: task.last_error_class ?? null,
     last_attempt_at: task.last_attempt_at ?? null,
     entry:
@@ -302,28 +301,19 @@ const readFeedbackQueue = () =>
     created_at: task.created_at || new Date().toISOString(),
   }));
 
-const writeJson = <T>(key: string, value: T[]) => {
+const writeJson = <T,>(key: string, value: T[]) => {
   localStorage.setItem(key, JSON.stringify(value));
   window.dispatchEvent(new Event(SYNC_EVENT));
 };
 
-const nextId = () =>
-  `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+const nextId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 export const getPendingSyncCounts = (userId: string | null) => {
-  const library = readLibraryQueue().filter(
-    (task) => task.user_id === userId && task.status === "pending"
-  ).length;
-  const feedback = readFeedbackQueue().filter(
-    (task) => task.user_id === userId && task.status === "pending"
-  ).length;
+  const library = readLibraryQueue().filter((task) => task.user_id === userId && task.status === "pending").length;
+  const feedback = readFeedbackQueue().filter((task) => task.user_id === userId && task.status === "pending").length;
   const needsAttention =
-    readLibraryQueue().filter(
-      (task) => task.user_id === userId && task.status === "needs_attention"
-    ).length +
-    readFeedbackQueue().filter(
-      (task) => task.user_id === userId && task.status === "needs_attention"
-    ).length;
+    readLibraryQueue().filter((task) => task.user_id === userId && task.status === "needs_attention").length +
+    readFeedbackQueue().filter((task) => task.user_id === userId && task.status === "needs_attention").length;
   return { library, feedback, total: library + feedback, needsAttention };
 };
 
@@ -350,16 +340,10 @@ export const getNeedsAttentionItems = (userId: string | null): NeedsAttentionIte
       created_at: task.created_at,
     }));
 
-  return [...libraryItems, ...feedbackItems].sort((a, b) =>
-    b.created_at.localeCompare(a.created_at)
-  );
+  return [...libraryItems, ...feedbackItems].sort((a, b) => b.created_at.localeCompare(a.created_at));
 };
 
-export const retryAsync = async <T>(
-  task: () => Promise<T>,
-  retries = 2,
-  baseDelayMs = 400
-): Promise<T> => {
+export const retryAsync = async <T,>(task: () => Promise<T>, retries = 2, baseDelayMs = 400): Promise<T> => {
   let lastResult: T | null = null;
   let lastThrownError: unknown;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -399,7 +383,11 @@ const computeBackoffMs = (attempt: number, errorClass: SyncErrorClass | null | u
   return 0;
 };
 
-const shouldDeferRetry = (task: { last_attempt_at: string | null; attempt_count: number; last_error_class?: SyncErrorClass | null }) => {
+const shouldDeferRetry = (task: {
+  last_attempt_at: string | null;
+  attempt_count: number;
+  last_error_class?: SyncErrorClass | null;
+}) => {
   const delay = computeBackoffMs(task.attempt_count, task.last_error_class);
   if (!delay) return false;
   if (!task.last_attempt_at) return false;
@@ -417,10 +405,8 @@ const isNonEmptyValue = (value: unknown) => {
 
 const mergeBookRows = (current: CloudBookUpsert, incoming: CloudBookUpsert) => {
   const merged: CloudBookUpsert = { ...current };
-  const currentClearRating =
-    Array.isArray(current.explicit_nulls) && current.explicit_nulls.includes("rating");
-  const incomingClearRating =
-    Array.isArray(incoming.explicit_nulls) && incoming.explicit_nulls.includes("rating");
+  const currentClearRating = Array.isArray(current.explicit_nulls) && current.explicit_nulls.includes("rating");
+  const incomingClearRating = Array.isArray(incoming.explicit_nulls) && incoming.explicit_nulls.includes("rating");
   const explicitClearRating = currentClearRating || incomingClearRating;
   const hasIncomingRating = typeof incoming.rating === "number" && Number.isFinite(incoming.rating);
 
@@ -518,9 +504,7 @@ export const upsertBooksToCloud = async (userId: string, books: CloudBookUpsert[
           ? Math.trunc(book.default_library_id)
           : null,
       published_year:
-        typeof book.published_year === "number" && Number.isFinite(book.published_year)
-          ? book.published_year
-          : null,
+        typeof book.published_year === "number" && Number.isFinite(book.published_year) ? book.published_year : null,
       cover_url: coverUrl,
       thumbnail: coverUrl,
       user_id: userId,
@@ -543,10 +527,10 @@ export const upsertBooksToCloud = async (userId: string, books: CloudBookUpsert[
     return next as CloudBookUpsert;
   });
 
+  const cleanRows = rows.map(({ dedupe_key, created_at, updated_at, ...rest }) => rest);
+
   const attemptUpsert = (rows: CloudBookUpsert[]) =>
-    (supabase as any)
-      .from("books")
-      .upsert(rows, { onConflict: "user_id,dedupe_key", ignoreDuplicates: false });
+    (supabase as any).from("books").upsert(cleanRows, { onConflict: "user_id,dedupe_key", ignoreDuplicates: false });
 
   const initial = await attemptUpsert(finalPayload);
   if (!(initial as any)?.error || finalPayload.length <= 1) return initial;
@@ -569,7 +553,7 @@ export const enqueueLibrarySync = (
   userId: string | null,
   books: CloudBookUpsert[],
   source: string,
-  fileName?: string
+  fileName?: string,
 ) => {
   const existing = readLibraryQueue();
   const next: LibrarySyncTask[] = [
@@ -715,7 +699,7 @@ export const flushFeedbackQueue = async (userId: string) => {
           },
         ]),
       1,
-      450
+      450,
     );
     const error = (result as any)?.error;
     if (error) {
@@ -751,10 +735,7 @@ export const flushAllPendingSync = async () => {
   const userId = await getAuthenticatedUserId();
   if (!userId) return { synced: 0, failed: 0, errorMessages: ["Not authenticated."] };
 
-  const [library, feedback] = await Promise.all([
-    flushLibraryQueue(userId),
-    flushFeedbackQueue(userId),
-  ]);
+  const [library, feedback] = await Promise.all([flushLibraryQueue(userId), flushFeedbackQueue(userId)]);
 
   return {
     synced: library.synced + feedback.synced,
@@ -765,11 +746,7 @@ export const flushAllPendingSync = async () => {
 
 export const checkCloudHealth = async (userId: string | null) => {
   if (!userId) return { ok: false, reason: "not_authenticated" as const };
-  const result: any = await retryAsync(
-    () => (supabase as any).from("books").select("id").limit(1),
-    1,
-    250
-  );
+  const result: any = await retryAsync(() => (supabase as any).from("books").select("id").limit(1), 1, 250);
   const { error } = result || {};
   if (error) {
     await recordSyncError({ error, operation: "select", table: "books", userId });
@@ -781,10 +758,10 @@ export const checkCloudHealth = async (userId: string | null) => {
 
 export const clearNeedsAttentionItems = (userId: string | null) => {
   const libraryRemaining = readLibraryQueue().filter(
-    (task) => !(task.user_id === userId && task.status === "needs_attention")
+    (task) => !(task.user_id === userId && task.status === "needs_attention"),
   );
   const feedbackRemaining = readFeedbackQueue().filter(
-    (task) => !(task.user_id === userId && task.status === "needs_attention")
+    (task) => !(task.user_id === userId && task.status === "needs_attention"),
   );
   writeJson(LIBRARY_QUEUE_KEY, libraryRemaining);
   writeJson(FEEDBACK_QUEUE_KEY, feedbackRemaining);
