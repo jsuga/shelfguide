@@ -527,10 +527,13 @@ export const upsertBooksToCloud = async (userId: string, books: CloudBookUpsert[
     return next as CloudBookUpsert;
   });
 
-  const cleanRows = finalPayload.map(({ dedupe_key, created_at, updated_at, ...rest }: any) => rest);
+  const stripGenerated = (row: any) => {
+    const { dedupe_key, created_at, updated_at, ...rest } = row;
+    return rest;
+  };
 
   const attemptUpsert = (rows: CloudBookUpsert[]) =>
-    (supabase as any).from("books").upsert(cleanRows, { onConflict: "user_id,dedupe_key", ignoreDuplicates: false });
+    (supabase as any).from("books").upsert(rows.map(stripGenerated), { onConflict: "user_id,dedupe_key", ignoreDuplicates: false });
 
   const initial = await attemptUpsert(finalPayload);
   if (!(initial as any)?.error || finalPayload.length <= 1) return initial;
