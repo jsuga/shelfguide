@@ -1,4 +1,4 @@
-# ShelfGuide — Because choosing is the hardest part.
+﻿# ShelfGuide — Because choosing is the hardest part.
 
 ShelfGuide is an AI-powered reading companion that helps you decide what to read next with transparent, genre-aware recommendations.
 
@@ -133,6 +133,10 @@ create policy "Users can delete their own books"
   on public.books for delete
   using (auth.uid() = user_id);
 ```
+
+Core migrations (see `supabase/migrations/`):
+- `20260215123000_books_sync_cover_dedupe_upgrade.sql` adds `published_year`, cover fields, and a generated `dedupe_key` (isbn13 -> isbn10 -> title+author+year).
+- `20260216120000_books_goodreads_dedupe.sql` adds `goodreads_book_id` and updates `dedupe_key` to prefer Goodreads ids after ISBNs.
 
 Local storage is still used as a fallback when the user is not signed in.
 
@@ -286,14 +290,14 @@ See `supabase/migrations/20260210142000_rls_policies.sql`.
 supabase db push
 ```
 
-2. In Supabase Dashboard, open **Security Advisor** and re-run checks. The “Database Has No Security Policies” warning should be cleared.
+2. In Supabase Dashboard, open **Security Advisor** and re-run checks. The "Database Has No Security Policies" warning should be cleared.
 
 ### Testing policies (anon/authenticated)
 
 Use the anon client (NOT service role) to verify:
 
 - An authenticated user can only see their own rows.
-- An authenticated user cannot read another user’s rows.
+- An authenticated user cannot read another user's rows.
 - An unauthenticated client cannot access protected tables.
 
 ### Smoke test (local or remote)
@@ -325,7 +329,7 @@ This integration is import-based (not an API connection). You can re-run it anyt
 ### Export from Goodreads (optional)
 
 1. Go to Goodreads -> My Books -> Import and Export.
-2. Click “Export Library” to download your CSV.
+2. Click "Export Library" to download your CSV.
 
 ### Import here
 
@@ -339,12 +343,14 @@ Duplicates are merged by stable key in this order:
 
 - `isbn13`
 - `isbn` (ISBN10 fallback)
+- `goodreads_book_id`
 - normalized `title + author + published_year`
 
 Cloud import writes are upsert-based and deduped by `books.dedupe_key`:
 
 - If ISBN13 exists: `isbn13:<isbn13>`
 - Else if ISBN10 exists: `isbn10:<isbn10>`
+- Else if Goodreads ID exists: `gr:<goodreads_book_id>`
 - Else: `title_author_year:<normalized_title>|<normalized_author>|<published_year_or_unknown>`
 
 If cloud write fails, import data is queued locally and retried in the background; you can also trigger retry manually from **Preferences -> Sync Status**.
@@ -374,6 +380,7 @@ If cloud write fails, import data is queued locally and retried in the backgroun
 - Key format:
   - `isbn13:<isbn13>` when ISBN13 is present
   - `isbn10:<isbn10>` when ISBN10 is present and ISBN13 is absent
+  - `gr:<goodreads_book_id>` when Goodreads ID is present and ISBNs are absent
   - `title_author_year:<normalized_title>|<normalized_author>|<published_year_or_unknown>` otherwise
 - Used across manual CSV import, CSV merge (Goodreads export), demo seed checks, and add-to-library flows.
 
@@ -383,6 +390,7 @@ If cloud write fails, import data is queued locally and retried in the backgroun
 - Adds generated `books.dedupe_key` and unique index `(user_id, dedupe_key)`.
 - Cloud writes use upsert conflict target `user_id,dedupe_key`.
 - Dedupe expression was upgraded in `supabase/migrations/20260215123000_books_sync_cover_dedupe_upgrade.sql`.
+- Goodreads ID support was added in `supabase/migrations/20260216120000_books_goodreads_dedupe.sql`.
 
 ## Session 6.2 Production Fixes
 
