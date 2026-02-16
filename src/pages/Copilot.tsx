@@ -348,7 +348,7 @@ const Copilot = () => {
     setBooks(cloudBooks);
     const localBooks = getLocalBooks();
     if (cloudBooks.length === 0 && localBooks.length > 0 && userIdValue) {
-      const { error: insertError } = await db.from("books").insert(localBooks.map((book: LibraryBook) => ({ ...book, user_id: userIdValue })));
+      const { error: insertError } = await db.from("books").insert(localBooks.map((book: LibraryBook) => { const { dedupe_key, created_at, updated_at, ...rest } = book as any; return { ...rest, user_id: userIdValue }; }));
       if (!insertError) {
         setLocalBooks([]);
         const { data: refreshed } = await db.from("books").select("*").eq("user_id", userIdValue).order("created_at", { ascending: false });
