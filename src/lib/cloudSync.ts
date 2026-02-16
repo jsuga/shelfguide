@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { buildBookDedupeKey } from "@/lib/bookDedupe";
 
 export const SYNC_EVENT = "shelfguide-sync-updated";
 const LIBRARY_QUEUE_KEY = "shelfguide-pending-library-sync";
@@ -9,6 +10,7 @@ const ORPHANED_QUEUE_ERROR = "Queued item missing user_id. Dismiss and recreate 
 
 export type CloudBookUpsert = {
   id?: string;
+  user_id?: string;
   title: string;
   author: string;
   genre?: string | null;
@@ -17,6 +19,8 @@ export type CloudBookUpsert = {
   status?: string | null;
   isbn?: string | null;
   isbn13?: string | null;
+  goodreads_book_id?: string | null;
+  default_library_id?: number | null;
   published_year?: number | null;
   rating?: number | null;
   date_read?: string | null;
@@ -403,6 +407,92 @@ const shouldDeferRetry = (task: { last_attempt_at: string | null; attempt_count:
   return elapsed < delay;
 };
 
+const isNonEmptyValue = (value: unknown) => {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "boolean") return true;
+  return true;
+};
+
+const mergeBookRows = (current: CloudBookUpsert, incoming: CloudBookUpsert) => {
+  const merged: CloudBookUpsert = { ...current };
+  const currentClearRating =
+    Array.isArray(current.explicit_nulls) && current.explicit_nulls.includes("rating");
+  const incomingClearRating =
+    Array.isArray(incoming.explicit_nulls) && incoming.explicit_nulls.includes("rating");
+  const explicitClearRating = currentClearRating || incomingClearRating;
+  const hasIncomingRating = typeof incoming.rating === "number" && Number.isFinite(incoming.rating);
+
+  const prefer = (key: keyof CloudBookUpsert) => {
+    const existingValue = merged[key];
+    const incomingValue = incoming[key];
+    if (!isNonEmptyValue(existingValue) && isNonEmptyValue(incomingValue)) {
+      (merged as Record<string, unknown>)[key as string] = incomingValue as unknown;
+    }
+  };
+
+  prefer("title");
+  prefer("author");
+  prefer("genre");
+  prefer("series_name");
+  prefer("is_first_in_series");
+  prefer("status");
+  prefer("isbn");
+  prefer("isbn13");
+  prefer("goodreads_book_id");
+  prefer("default_library_id");
+  prefer("published_year");
+  prefer("date_read");
+  prefer("shelf");
+  prefer("description");
+  prefer("page_count");
+  prefer("source");
+
+  // Preserve existing cover values when duplicates appear.
+  prefer("cover_url");
+  prefer("thumbnail");
+  prefer("cover_source");
+  prefer("cover_failed_at");
+
+  if (hasIncomingRating) {
+    merged.rating = incoming.rating;
+  }
+
+  const hasMergedRating = typeof merged.rating === "number" && Number.isFinite(merged.rating);
+  if (!hasMergedRating && explicitClearRating) {
+    merged.rating = null;
+    merged.explicit_nulls = ["rating"];
+  } else if (hasMergedRating && Array.isArray(merged.explicit_nulls)) {
+    merged.explicit_nulls = merged.explicit_nulls.filter((value) => value !== "rating");
+    if (merged.explicit_nulls.length === 0) delete merged.explicit_nulls;
+  }
+
+  return merged;
+};
+
+const dedupeBooksForUpsert = (rows: CloudBookUpsert[]) => {
+  const map = new Map<string, CloudBookUpsert>();
+  for (const row of rows) {
+    const key = buildBookDedupeKey({
+      title: row.title || "",
+      author: row.author || "",
+      isbn: row.isbn ?? null,
+      isbn13: row.isbn13 ?? null,
+      goodreads_book_id: row.goodreads_book_id ?? null,
+      default_library_id: row.default_library_id ?? null,
+      published_year: row.published_year ?? null,
+    });
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...row });
+      continue;
+    }
+    map.set(key, mergeBookRows(existing, row));
+  }
+  return Array.from(map.values());
+};
+
 export const getAuthenticatedUserId = async () => {
   const { data: sessionData } = await supabase.auth.getSession();
   const fromSession = sessionData.session?.user?.id;
@@ -416,12 +506,17 @@ export const upsertBooksToCloud = async (userId: string, books: CloudBookUpsert[
   if (!books.length) return { data: null, error: null };
   const payload = books.map((book) => {
     const coverUrl = (book.cover_url || book.thumbnail || "").trim() || null;
-    const next: Record<string, unknown> = {
+    const next: CloudBookUpsert = {
       ...book,
       title: book.title.trim(),
       author: book.author.trim(),
       isbn: book.isbn?.trim() || null,
       isbn13: book.isbn13?.trim() || null,
+      goodreads_book_id: book.goodreads_book_id?.toString().trim() || null,
+      default_library_id:
+        typeof book.default_library_id === "number" && Number.isFinite(book.default_library_id)
+          ? Math.trunc(book.default_library_id)
+          : null,
       published_year:
         typeof book.published_year === "number" && Number.isFinite(book.published_year)
           ? book.published_year
@@ -430,20 +525,44 @@ export const upsertBooksToCloud = async (userId: string, books: CloudBookUpsert[
       thumbnail: coverUrl,
       user_id: userId,
     };
+    return next;
+  });
+
+  const deduped = dedupeBooksForUpsert(payload as CloudBookUpsert[]);
+  const finalPayload = deduped.map((row) => {
+    const next: Record<string, unknown> = { ...row };
     // Avoid clearing server-side values on partial updates.
     if (next.cover_url === null) delete next.cover_url;
     if (next.thumbnail === null) delete next.thumbnail;
-    const allowNullRating = Array.isArray(book.explicit_nulls) && book.explicit_nulls.includes("rating");
+    const allowNullRating = Array.isArray(row.explicit_nulls) && row.explicit_nulls.includes("rating");
     if (!allowNullRating && (next.rating === null || typeof next.rating === "undefined")) {
       delete next.rating;
     }
     if (next.status == null) delete next.status;
     delete (next as Record<string, unknown>).explicit_nulls;
-    return next;
+    return next as CloudBookUpsert;
   });
-  return (supabase as any)
-    .from("books")
-    .upsert(payload, { onConflict: "user_id,dedupe_key", ignoreDuplicates: false });
+
+  const attemptUpsert = (rows: CloudBookUpsert[]) =>
+    (supabase as any)
+      .from("books")
+      .upsert(rows, { onConflict: "user_id,dedupe_key", ignoreDuplicates: false });
+
+  const initial = await attemptUpsert(finalPayload);
+  if (!(initial as any)?.error || finalPayload.length <= 1) return initial;
+
+  const chunkSize = Math.max(1, Math.min(50, Math.ceil(finalPayload.length / 2)));
+  let chunkError: any = null;
+  for (let i = 0; i < finalPayload.length; i += chunkSize) {
+    const chunk = finalPayload.slice(i, i + chunkSize);
+    const result = await attemptUpsert(chunk);
+    if ((result as any)?.error) {
+      chunkError = (result as any).error;
+      break;
+    }
+  }
+
+  return { data: null, error: chunkError };
 };
 
 export const enqueueLibrarySync = (

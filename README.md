@@ -137,6 +137,7 @@ create policy "Users can delete their own books"
 Core migrations (see `supabase/migrations/`):
 - `20260215123000_books_sync_cover_dedupe_upgrade.sql` adds `published_year`, cover fields, and a generated `dedupe_key` (isbn13 -> isbn10 -> title+author+year).
 - `20260216120000_books_goodreads_dedupe.sql` adds `goodreads_book_id` and updates `dedupe_key` to prefer Goodreads ids after ISBNs.
+- `20260216180000_books_default_library_id_dedupe.sql` adds `default_library_id` and updates `dedupe_key` to include default ids before title/author/year.
 
 Local storage is still used as a fallback when the user is not signed in.
 
@@ -322,18 +323,27 @@ Where to get them:
 - `SUPABASE_ANON_KEY`: Supabase Project Settings -> API -> anon public key.
 - `SUPABASE_ACCESS_TOKEN`: Sign in via the app in your browser, open DevTools -> Application -> Local Storage, and copy the `access_token` from the `sb-<project-ref>-auth-token` entry.
 
-## CSV Import (Goodreads export supported)
+## CSV Import (Recommended: default template)
 
-This integration is import-based (not an API connection). You can re-run it anytime.
+The primary import path uses the custom CSV schema with `library_id` for stable, row-by-row imports.
 
-### Export from Goodreads (optional)
+### Default CSV (recommended)
 
-1. Go to Goodreads -> My Books -> Import and Export.
-2. Click "Export Library" to download your CSV.
+1. Download the template at `/defaultBookLibrary.csv`.
+2. Save your file in Downloads (example filename: `defaultBookLibrary.csv`).
+3. Go to **My Library** -> **Import CSV (Recommended)** and upload the file.
 
-### Import here
+Required headers (case-insensitive, whitespace-tolerant):
 
-Go to **My Library** -> **Advanced** and use the CSV import card to upload the file. The app maps shelves:
+- `library_id`, `title`, `author`, `genre`, `series_name`, `is_first_in_series`, `status`
+
+Re-importing the same file updates rows by `library_id` without creating duplicates.
+
+### Goodreads import (preview)
+
+Goodreads import is available in **My Library** -> **Advanced** as a preview. It is not the primary path for the MSIS 549 demo.
+
+The app maps shelves:
 
 - `to-read` -> `tbr`
 - `currently-reading` -> `reading`
@@ -344,6 +354,7 @@ Duplicates are merged by stable key in this order:
 - `isbn13`
 - `isbn` (ISBN10 fallback)
 - `goodreads_book_id`
+- `default_library_id`
 - normalized `title + author + published_year`
 
 Cloud import writes are upsert-based and deduped by `books.dedupe_key`:
@@ -351,6 +362,7 @@ Cloud import writes are upsert-based and deduped by `books.dedupe_key`:
 - If ISBN13 exists: `isbn13:<isbn13>`
 - Else if ISBN10 exists: `isbn10:<isbn10>`
 - Else if Goodreads ID exists: `gr:<goodreads_book_id>`
+- Else if default library id exists: `default:<library_id>`
 - Else: `title_author_year:<normalized_title>|<normalized_author>|<published_year_or_unknown>`
 
 If cloud write fails, import data is queued locally and retried in the background; you can also trigger retry manually from **Preferences -> Sync Status**.
@@ -381,6 +393,7 @@ If cloud write fails, import data is queued locally and retried in the backgroun
   - `isbn13:<isbn13>` when ISBN13 is present
   - `isbn10:<isbn10>` when ISBN10 is present and ISBN13 is absent
   - `gr:<goodreads_book_id>` when Goodreads ID is present and ISBNs are absent
+  - `default:<library_id>` when default library id is present and ISBNs/Goodreads are absent
   - `title_author_year:<normalized_title>|<normalized_author>|<published_year_or_unknown>` otherwise
 - Used across manual CSV import, CSV merge (Goodreads export), demo seed checks, and add-to-library flows.
 
@@ -430,7 +443,7 @@ If cloud write fails, import data is queued locally and retried in the backgroun
 
 You can download a starter CSV template from the app:
 
-- Go to **My Library** -> **Connect / Import** -> **Download CSV template**
+- Go to **My Library** -> **Import CSV (Recommended)** -> **Download CSV template**
 - Or use the static asset directly: `/defaultBookLibrary.csv`
 
 Template file location in repo:
@@ -441,12 +454,13 @@ Template file location in repo:
 
 Supported columns for manual library import (`Add Library` CSV flow):
 
+- `library_id` (required; stable per-row id)
 - `title` (required)
 - `author` (required)
 - `genre` (optional)
 - `series_name` (optional)
-- `is_first_in_series` (optional; accepted truthy values include `true`, `yes`, `1`)
-- `status` (optional; defaults to `want_to_read`)
+- `is_first_in_series` (optional; accepted values include `1/0`, `true/false`, `yes/no`)
+- `status` (optional; accepted values include `TBR`, `Reading`, `Finished`)
 
 ## Session 5 Updates
 

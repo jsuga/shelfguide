@@ -24,6 +24,8 @@ import {
   enqueueLibrarySync,
   recordSyncError,
   flushAllPendingSync,
+  getPendingSyncCounts,
+  checkCloudHealth,
   getAuthenticatedUserId,
   retryAsync,
   upsertBooksToCloud,
@@ -42,6 +44,8 @@ type LibraryBook = {
   status: string;
   isbn?: string | null;
   isbn13?: string | null;
+  goodreads_book_id?: string | null;
+  default_library_id?: number | null;
   published_year?: number | null;
   rating?: number | null;
   date_read?: string | null;
@@ -61,6 +65,7 @@ type ImportSummary = {
   created: number;
   updated: number;
   skipped: number;
+  merged: number;
   errors: number;
 };
 
@@ -113,6 +118,9 @@ const Library = () => {
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<string | null>(null);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
+  const [defaultImporting, setDefaultImporting] = useState(false);
+  const [defaultImportProgress, setDefaultImportProgress] = useState<string | null>(null);
+  const [defaultImportSummary, setDefaultImportSummary] = useState<ImportSummary | null>(null);
   const [enrichOnImport, setEnrichOnImport] = useState(true);
   const [importLogs, setImportLogs] = useState<
     {
@@ -224,10 +232,28 @@ const Library = () => {
     setCloudNotice(null);
 
     const cloudBooks = (data || []) as LibraryBook[];
-    setBooks(cloudBooks);
-    setLocalBooks(cloudBooks);
-
     const localBooks = getLocalBooks();
+    const health = await checkCloudHealth(userIdValue);
+    const pending = getPendingSyncCounts(userIdValue);
+    const hasPending = pending.total > 0;
+
+    let allowReplace = health.ok && !hasPending;
+    if (health.ok && hasPending && localBooks.length > 0) {
+      setCloudNotice(`${pending.total} items pending sync. Keeping local library until sync completes or you confirm.`);
+      allowReplace = window.confirm(
+        `There are ${pending.total} pending sync item(s). Click OK to load cloud anyway, or Cancel to keep local until sync completes.`
+      );
+    } else if (health.ok && hasPending) {
+      setCloudNotice(`${pending.total} items pending sync. Keeping local library until sync completes.`);
+    }
+
+    if (allowReplace) {
+      setBooks(cloudBooks);
+      setLocalBooks(cloudBooks);
+    } else {
+      setBooks(localBooks);
+    }
+
     if (cloudBooks.length === 0 && localBooks.length > 0 && userIdValue) {
       const { error: insertError } = await db
         .from("books")
@@ -525,7 +551,40 @@ const Library = () => {
   };
 
   const normalizeHeader = (value: string) =>
-    value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, "_")
+      .replace(/[^a-z0-9_]/g, "")
+      .replace(/_+/g, "_");
+
+  const DEFAULT_CSV_HEADERS = [
+    "library_id",
+    "title",
+    "author",
+    "genre",
+    "series_name",
+    "is_first_in_series",
+    "status",
+  ];
+
+  const REQUIRED_DEFAULT_HEADERS = ["library_id", "title", "author"];
+
+  const parseBooleanish = (value: string | null | undefined): boolean => {
+    const raw = (value || "").trim().toLowerCase();
+    if (!raw) return false;
+    if (["1", "1.0", "true", "yes", "y"].includes(raw)) return true;
+    if (["0", "0.0", "false", "no", "n"].includes(raw)) return false;
+    return false;
+  };
+
+  const parseDefaultLibraryId = (value: string | null | undefined): number | null => {
+    const raw = (value || "").trim();
+    if (!raw) return null;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) return null;
+    return parsed;
+  };
 
   const stripGoodreadsIsbn = (raw: string) => {
     return raw.replace(/^="?|"$/g, "").replace(/[^0-9xX]/g, "").trim();
@@ -619,77 +678,173 @@ const Library = () => {
   };
 
   const handleLibraryUpload = async (file: File) => {
-    const text = await file.text();
-    const rows = parseCsv(text).filter((row) => row.some((cell) => cell.trim().length));
-    if (rows.length < 2) {
-      toast.error("CSV is empty or missing rows.");
-      return;
-    }
+    setDefaultImportSummary(null);
+    setDefaultImportProgress("Reading CSV file...");
+    setDefaultImporting(true);
 
-    const headers = rows[0].map(normalizeHeader);
-    const dataRows = rows.slice(1);
-    const booksFromCsv: LibraryBook[] = [];
-
-    dataRows.forEach((row) => {
-      const record: Record<string, string> = {};
-      headers.forEach((header, index) => {
-        record[header] = (row[index] || "").trim();
-      });
-
-      if (!record.title || !record.author) return;
-
-      booksFromCsv.push({
-        title: record.title,
-        author: record.author,
-        genre: record.genre || "",
-        series_name: record.series_name || null,
-        is_first_in_series: ["true", "yes", "1"].includes(
-          (record.is_first_in_series || "").toLowerCase()
-        ),
-        status: record.status || "tbr",
-      });
-    });
-
-    if (!booksFromCsv.length) {
-      toast.error("No valid rows found. Ensure title and author columns exist.");
-      return;
-    }
-
-    if (userId) {
-      const userIdValue = await getAuthenticatedUserId();
-      if (!userIdValue) {
-        const nextBooks = [...books, ...booksFromCsv];
-        persistBooks(nextBooks);
-        enqueueLibrarySync(userIdValue, booksFromCsv, "manual_csv_upload", file.name);
-        setCloudNotice("Not signed in. Saved locally and queued for cloud sync.");
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text).filter((row) => row.some((cell) => cell.trim().length));
+      if (rows.length < 2) {
+        toast.error("CSV is empty or missing rows.");
+        setDefaultImportProgress(null);
         return;
       }
 
-      const { error } = await retryAsync(
-        () => upsertBooksToCloud(userIdValue, booksFromCsv),
-        1,
-        350
+      const headers = rows[0].map(normalizeHeader);
+      const missingHeaders = REQUIRED_DEFAULT_HEADERS.filter((header) => !headers.includes(header));
+      if (missingHeaders.length > 0) {
+        toast.error(
+          `Missing required headers: ${missingHeaders.join(", ")}. Expected: ${DEFAULT_CSV_HEADERS.join(", ")}.`
+        );
+        setDefaultImportProgress(null);
+        return;
+      }
+
+      const dataRows = rows.slice(1);
+      const rowsRead = dataRows.length;
+      const failures: string[] = [];
+      let skipped = 0;
+      let merged = 0;
+      let created = 0;
+      let updated = 0;
+
+      const incomingMap = new Map<string, LibraryBook>();
+      dataRows.forEach((row, index) => {
+        const record: Record<string, string> = {};
+        headers.forEach((header, colIndex) => {
+          record[header] = (row[colIndex] || "").trim();
+        });
+
+        const titleValue = record.title?.trim() || "";
+        const authorValue = record.author?.trim() || "";
+        const defaultId = parseDefaultLibraryId(record.library_id);
+        if (defaultId == null) {
+          skipped += 1;
+          failures.push(`Row ${index + 2}: missing or invalid library_id.`);
+          return;
+        }
+        if (!titleValue || !authorValue) {
+          skipped += 1;
+          failures.push(`Row ${index + 2}: missing title or author.`);
+          return;
+        }
+
+        const book: LibraryBook = {
+          title: titleValue,
+          author: authorValue,
+          genre: record.genre?.trim() || "",
+          series_name: record.series_name?.trim() || null,
+          is_first_in_series: parseBooleanish(record.is_first_in_series),
+          status: normalizeStatus(record.status || "tbr"),
+          default_library_id: defaultId,
+          source: "default_csv",
+        };
+
+        const key = buildBookDedupeKey(book);
+        if (incomingMap.has(key)) {
+          merged += 1;
+        }
+        incomingMap.set(key, book);
+      });
+
+      if (!incomingMap.size) {
+        toast.error("No valid rows found. Ensure library_id, title, and author are present.");
+        setDefaultImportProgress(null);
+        setDefaultImportSummary({
+          fileName: file.name,
+          rowsRead,
+          created,
+          updated,
+          skipped,
+          merged,
+          errors: failures.length,
+        });
+        return;
+      }
+
+      const existing = books;
+      const indexByKey = new Map<string, number>();
+      const nextBooks = [...existing];
+      existing.forEach((book, index) => {
+        indexByKey.set(buildBookDedupeKey(book), index);
+      });
+
+      const upserts: LibraryBook[] = [];
+      incomingMap.forEach((incoming) => {
+        const key = buildBookDedupeKey(incoming);
+        const existingIndex = indexByKey.get(key);
+        if (typeof existingIndex !== "number") {
+          created += 1;
+          upserts.push(incoming);
+          indexByKey.set(key, nextBooks.length);
+          nextBooks.push(incoming);
+          return;
+        }
+
+        updated += 1;
+        const current = nextBooks[existingIndex];
+        const mergedBook: LibraryBook = {
+          ...current,
+          ...incoming,
+          id: current?.id,
+          rating: current?.rating ?? incoming.rating ?? null,
+          cover_url: current?.cover_url || current?.thumbnail || incoming.cover_url || incoming.thumbnail || null,
+          thumbnail: current?.cover_url || current?.thumbnail || incoming.cover_url || incoming.thumbnail || null,
+          cover_source: current?.cover_source || incoming.cover_source || null,
+          cover_failed_at: current?.cover_failed_at || incoming.cover_failed_at || null,
+          source: current?.source || incoming.source,
+        };
+        nextBooks[existingIndex] = mergedBook;
+        upserts.push(mergedBook);
+      });
+
+      persistBooks(nextBooks);
+
+      const summary = {
+        fileName: file.name,
+        rowsRead,
+        created,
+        updated,
+        skipped,
+        merged,
+        errors: failures.length,
+      };
+      setDefaultImportSummary(summary);
+      setDefaultImportProgress(null);
+
+      if (userId) {
+        const userIdValue = await getAuthenticatedUserId();
+        if (!userIdValue) {
+          setCloudNotice("Not signed in. Saved locally only.");
+          toast.success(
+            `Import complete. Rows: ${summary.rowsRead}, created: ${summary.created}, updated: ${summary.updated}, skipped: ${summary.skipped}, merged: ${summary.merged}, errors: ${summary.errors}.`
+          );
+          return;
+        }
+
+        enqueueLibrarySync(userIdValue, upserts, "default_csv_upload", file.name);
+        setCloudNotice(`Syncing ${upserts.length} items...`);
+        const syncResult = await flushAllPendingSync();
+        if (syncResult.failed > 0) {
+          setCloudNotice("Cloud sync pending. We will retry automatically.");
+          toast.error(syncResult.errorMessages[0] || "Cloud sync failed. Using local-only data for now.");
+          return;
+        }
+        await loadBooks(userIdValue);
+        setCloudNotice(null);
+      }
+
+      toast.success(
+        `Import complete. Rows: ${summary.rowsRead}, created: ${summary.created}, updated: ${summary.updated}, skipped: ${summary.skipped}, merged: ${summary.merged}, errors: ${summary.errors}.`
       );
-      if (error) {
-        const syncError = await recordSyncError({ error, operation: "upsert", table: "books", userId: userIdValue });
-        toast.error(`Upload failed: ${syncError.userMessage || syncError.message}. Saved locally and queued for retry.`);
-        const nextBooks = [...books, ...booksFromCsv];
-        persistBooks(nextBooks);
-        enqueueLibrarySync(userIdValue, booksFromCsv, "manual_csv_upload", file.name);
-        setCloudNotice("Cloud sync pending. We will retry automatically.");
-        return;
-      }
-      await loadBooks(userIdValue);
-      toast.success(`Added ${booksFromCsv.length} book${booksFromCsv.length === 1 ? "" : "s"} from CSV.`);
-      return;
+    } finally {
+      setDefaultImporting(false);
     }
-
-    const nextBooks = [...books, ...booksFromCsv];
-    persistBooks(nextBooks);
-    toast.success(`Added ${booksFromCsv.length} book${booksFromCsv.length === 1 ? "" : "s"} from CSV.`);
   };
 
   const handleGoodreadsImport = async (file: File) => {
+    toast.message("Goodreads import is coming soon. This preview may change.");
     const userIdValue = await getAuthenticatedUserId();
     if (!userIdValue) {
       toast.error("Sign in to import Goodreads data into your cloud library.");
@@ -744,11 +899,12 @@ const Library = () => {
         const bookStatus = mapShelfToStatus(shelf, bookshelves);
         const isbn = stripGoodreadsIsbn(record.isbn || "");
         const isbn13 = stripGoodreadsIsbn(record.isbn13 || "");
+        const goodreadsBookId = (record.book_id || "").trim();
         const rawRating = record.my_rating ? Number(record.my_rating) : null;
         const rating =
           Number.isFinite(rawRating) && rawRating >= 1 && rawRating <= 5
             ? Math.trunc(rawRating)
-            : null;
+          : null;
         const publishedYear = parsePublishedYear(
           record.year_published || record.original_publication_year || ""
         );
@@ -763,6 +919,7 @@ const Library = () => {
           status: bookStatus,
           isbn: isbn || null,
           isbn13: isbn13 || null,
+          goodreads_book_id: goodreadsBookId || null,
           published_year: publishedYear,
           rating: Number.isFinite(rating) ? rating : null,
           date_read: dateRead,
@@ -882,7 +1039,7 @@ const Library = () => {
       if (!upserts.length) {
         toast.error("No rows were eligible for import after dedupe.");
         setImportProgress(null);
-        setImportSummary({ fileName: file.name, rowsRead, created, updated, skipped, errors: failures.length });
+        setImportSummary({ fileName: file.name, rowsRead, created, updated, skipped, merged: 0, errors: failures.length });
         return;
       }
 
@@ -912,12 +1069,13 @@ const Library = () => {
         created,
         updated,
         skipped,
+        merged: 0,
         errors: failures.length,
       };
       setImportSummary(summary);
       setImportProgress(null);
       toast.success(
-        `Goodreads import complete. Rows: ${summary.rowsRead}, created: ${summary.created}, updated: ${summary.updated}, skipped: ${summary.skipped}, errors: ${summary.errors}.`
+        `Goodreads import complete. Rows: ${summary.rowsRead}, created: ${summary.created}, updated: ${summary.updated}, skipped: ${summary.skipped}, merged: ${summary.merged}, errors: ${summary.errors}.`
       );
     } finally {
       setImporting(false);
@@ -982,13 +1140,6 @@ const Library = () => {
           <p className="text-muted-foreground mt-2 font-body">
             Your personal book collection
           </p>
-          <div className="mt-3">
-            <Button variant="outline" size="sm" asChild>
-              <a href="/defaultBookLibrary.csv" download>
-                Download CSV template
-              </a>
-            </Button>
-          </div>
         </div>
         <div className="flex flex-col items-end gap-2">
           <input
@@ -1069,10 +1220,44 @@ const Library = () => {
             </DialogContent>
           </Dialog>
           <Button variant="outline" size="sm" className="text-xs px-3 h-8" onClick={() => fileInputRef.current?.click()}>
-            Add Library
+            Import CSV
           </Button>
         </div>
       </div>
+
+      <Card className="mb-6 border-border/60 bg-card/70">
+        <CardContent className="p-6">
+          <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Import</div>
+          <h2 className="font-display text-2xl font-bold mt-2">Import CSV (Recommended)</h2>
+          <p className="text-sm text-muted-foreground font-body mt-2">
+            Use the template CSV. Includes <span className="font-medium">library_id</span> for stable imports.
+          </p>
+          <p className="text-xs text-muted-foreground font-body mt-2">
+            If you're importing from Downloads, select your file (e.g., <span className="font-medium">defaultBookLibrary.csv</span>).
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Button onClick={() => fileInputRef.current?.click()} disabled={defaultImporting}>
+              {defaultImporting ? "Importing..." : "Choose CSV from Downloads"}
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <a href="/defaultBookLibrary.csv" download>
+                Download CSV template
+              </a>
+            </Button>
+          </div>
+          {defaultImportProgress && (
+            <p className="text-xs text-muted-foreground mt-3">{defaultImportProgress}</p>
+          )}
+          {defaultImportSummary && (
+            <div className="mt-3 rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs">
+              <div className="font-medium">Latest import: {defaultImportSummary.fileName}</div>
+              <div className="text-muted-foreground mt-1">
+                Rows {defaultImportSummary.rowsRead} | Created {defaultImportSummary.created} | Updated {defaultImportSummary.updated} | Skipped {defaultImportSummary.skipped} | Merged {defaultImportSummary.merged} | Errors {defaultImportSummary.errors}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {cloudNotice && (
         <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground flex items-center justify-between gap-2">
@@ -1128,7 +1313,7 @@ const Library = () => {
           <AccordionTrigger className="px-6">
             <div className="flex items-center gap-2">
               <span className="font-display text-xl">Advanced</span>
-              <Badge variant="outline" className="text-[10px]">Goodreads import</Badge>
+              <Badge variant="outline" className="text-[10px]">Coming soon</Badge>
             </div>
           </AccordionTrigger>
           <AccordionContent className="px-6 pb-6">
@@ -1136,12 +1321,9 @@ const Library = () => {
               <Card className="border-border/60 bg-card/70">
                 <CardContent className="p-6">
                   <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Connect / Import</div>
-                  <h2 className="font-display text-2xl font-bold mt-2">Goodreads Import</h2>
+                  <h2 className="font-display text-2xl font-bold mt-2">Goodreads Import (Preview)</h2>
                   <p className="text-sm text-muted-foreground font-body mt-2">
-                    This is a CSV import (not an API connection yet). You can re-run it anytime.
-                  </p>
-                  <p className="text-xs text-muted-foreground font-body mt-2">
-                    Need a starter format for physical library uploads? Download the default template.
+                    This is a preview CSV import (not an API connection yet). The recommended path is the default CSV above.
                   </p>
                   <ol className="list-decimal pl-5 mt-4 space-y-2 text-sm text-muted-foreground">
                     <li>Go to Goodreads &gt; My Books &gt; Import and Export.</li>
@@ -1163,7 +1345,7 @@ const Library = () => {
                       }}
                     />
                     <Button onClick={() => importInputRef.current?.click()} disabled={importing}>
-                      {importing ? "Importing..." : "Import Goodreads CSV"}
+                      {importing ? "Importing..." : "Import Goodreads CSV (Preview)"}
                     </Button>
                     <label className="flex items-center gap-2 text-xs text-muted-foreground">
                       <Checkbox checked={enrichOnImport} onCheckedChange={(checked) => setEnrichOnImport(checked === true)} />
@@ -1177,7 +1359,7 @@ const Library = () => {
                     <div className="mt-3 rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs">
                       <div className="font-medium">Latest import: {importSummary.fileName}</div>
                       <div className="text-muted-foreground mt-1">
-                        Rows {importSummary.rowsRead} | Created {importSummary.created} | Updated {importSummary.updated} | Skipped {importSummary.skipped} | Errors {importSummary.errors}
+                        Rows {importSummary.rowsRead} | Created {importSummary.created} | Updated {importSummary.updated} | Skipped {importSummary.skipped} | Merged {importSummary.merged} | Errors {importSummary.errors}
                       </div>
                     </div>
                   )}
@@ -1208,7 +1390,7 @@ const Library = () => {
                   {loadingLogs ? (
                     <p className="text-sm text-muted-foreground mt-4">Loading history...</p>
                   ) : importLogs.length === 0 ? (
-                    <p className="text-sm text-muted-foreground mt-4">No imports yet. Upload a Goodreads CSV to see history.</p>
+                    <p className="text-sm text-muted-foreground mt-4">No imports yet. Upload a Goodreads CSV (preview) to see history.</p>
                   ) : (
                     <div className="mt-4 grid gap-3">
                       {importLogs.map((log) => (

@@ -94,7 +94,7 @@ const SyncBanner = () => {
     : pending.needsAttention > 0
     ? `Sync needs attention: ${pending.needsAttention} item(s) require manual review.`
     : pending.total > 0
-    ? syncError?.userMessage || "Cloud sync is unavailable. Using local-only data for now."
+    ? `Syncing ${pending.total} item(s)...`
     : syncError?.userMessage || null;
 
   if (!bannerMessage) return null;
