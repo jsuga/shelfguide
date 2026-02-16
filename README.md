@@ -138,6 +138,7 @@ Core migrations (see `supabase/migrations/`):
 - `20260215123000_books_sync_cover_dedupe_upgrade.sql` adds `published_year`, cover fields, and a generated `dedupe_key` (isbn13 -> isbn10 -> title+author+year).
 - `20260216120000_books_goodreads_dedupe.sql` adds `goodreads_book_id` and updates `dedupe_key` to prefer Goodreads ids after ISBNs.
 - `20260216180000_books_default_library_id_dedupe.sql` adds `default_library_id` and updates `dedupe_key` to include default ids before title/author/year.
+- `20260216190000_books_cover_cache.sql` adds `cover_storage_path`, cache timestamps/status, and error fields for Storage-backed covers.
 
 Local storage is still used as a fallback when the user is not signed in.
 
@@ -450,6 +451,29 @@ You can download a starter CSV template from the app:
 Template file location in repo:
 
 - `public/defaultBookLibrary.csv`
+
+## Cover Cache (Supabase Storage)
+
+This app caches book covers in Supabase Storage to avoid flaky external URLs.
+
+Setup steps:
+
+1. Create a public Storage bucket named `book-covers`.
+2. Run migration `20260216190000_books_cover_cache.sql`.
+3. Deploy the edge function:
+   - `supabase functions deploy cache-book-cover`
+4. Set function secrets:
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `COVER_CACHE_ADMIN_KEY` (for the backfill script)
+
+Backfill existing covers (admin-only):
+
+```sh
+SUPABASE_URL=... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+COVER_CACHE_ADMIN_KEY=... \
+npm run backfill:cover-cache
+```
 
 ### Manual library CSV columns
 

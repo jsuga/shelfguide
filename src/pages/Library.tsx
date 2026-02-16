@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookMarked, BookOpen, Search, RefreshCw } from "lucide-react";
+import { BookMarked, BookOpen, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -22,7 +22,7 @@ import {
 } from "@/lib/cloudSync";
 import { buildBookDedupeKey } from "@/lib/bookDedupe";
 import { applySort, type SortMode } from "@/lib/librarySort";
-import { clearCoverCacheForBook, enrichCovers } from "@/lib/coverEnrichment";
+import { enrichCovers } from "@/lib/coverEnrichment";
 
 type LibraryBook = {
   id?: string;
@@ -44,6 +44,10 @@ type LibraryBook = {
   page_count?: number | null;
   thumbnail?: string | null;
   cover_url?: string | null;
+  cover_storage_path?: string | null;
+  cover_cached_at?: string | null;
+  cover_cache_status?: string | null;
+  cover_cache_error?: string | null;
   cover_source?: string | null;
   cover_failed_at?: string | null;
   source?: string | null;
@@ -99,6 +103,8 @@ const Library = () => {
   const [failedCovers, setFailedCovers] = useState<Set<string>>(new Set());
   const [savingRatings, setSavingRatings] = useState<Record<string, boolean>>({});
   const [savingStatuses, setSavingStatuses] = useState<Record<string, boolean>>({});
+  const coverCacheInFlightRef = useRef<Set<string>>(new Set());
+  const coverCacheProcessingRef = useRef(false);
 
   const getLocalBooks = () => {
     const stored = localStorage.getItem("reading-copilot-library");
@@ -246,6 +252,78 @@ const Library = () => {
   }, [books, userId]);
 
   useEffect(() => {
+    if (!userId || books.length === 0) return;
+    const candidates = books.filter(
+      (book) =>
+        !!book.id &&
+        !book.cover_storage_path &&
+        (book.cover_url || book.thumbnail)
+    );
+    if (candidates.length === 0) return;
+
+    const pending = candidates.filter((book) => !coverCacheInFlightRef.current.has(book.id || ""));
+    if (pending.length === 0) return;
+    pending.forEach((book) => {
+      if (book.id) coverCacheInFlightRef.current.add(book.id);
+    });
+
+    const run = async () => {
+      if (coverCacheProcessingRef.current) return;
+      coverCacheProcessingRef.current = true;
+      try {
+        const batchSize = 5;
+        for (let i = 0; i < pending.length; i += batchSize) {
+          const batch = pending.slice(i, i + batchSize);
+          await Promise.all(
+            batch.map(async (book) => {
+              const result = await supabase.functions.invoke("cache-book-cover", {
+                body: { book_id: book.id },
+              });
+              const error = (result as any)?.error;
+              const data = (result as any)?.data || {};
+              if (error || !data?.cover_storage_path) {
+                setBooks((prev) => {
+                  const next = prev.map((entry) =>
+                    entry.id === book.id
+                      ? {
+                          ...entry,
+                          cover_cache_status: "failed",
+                          cover_cache_error: error?.message || "Cover cache failed.",
+                        }
+                      : entry
+                  );
+                  setLocalBooks(next);
+                  return next;
+                });
+                return;
+              }
+              setBooks((prev) => {
+                const next = prev.map((entry) =>
+                  entry.id === book.id
+                    ? {
+                        ...entry,
+                        cover_storage_path: data.cover_storage_path,
+                        cover_cache_status: "cached",
+                        cover_cache_error: null,
+                      }
+                    : entry
+                );
+                setLocalBooks(next);
+                return next;
+              });
+            })
+          );
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      } finally {
+        coverCacheProcessingRef.current = false;
+      }
+    };
+
+    void run();
+  }, [books, userId]);
+
+  useEffect(() => {
     const init = async () => {
       const userIdValue = await getAuthenticatedUserId();
       const { data } = await supabase.auth.getSession();
@@ -344,6 +422,12 @@ const Library = () => {
       if (import.meta.env.DEV) console.warn("[ShelfGuide] Template download failed:", error);
       toast.error("Could not download the CSV template. Please try again.");
     }
+  };
+
+  const getStorageCoverUrl = (path: string | null | undefined) => {
+    if (!path) return null;
+    const { data } = supabase.storage.from("book-covers").getPublicUrl(path);
+    return data?.publicUrl || null;
   };
 
   const updateBookStatus = async (book: LibraryBook, nextStatus: string) => {
@@ -486,48 +570,6 @@ const Library = () => {
     toast.success("Book removed.");
   };
 
-
-  /** Retry cover for a specific book */
-  const retryCover = (book: LibraryBook) => {
-    // Clear from failed set
-    setFailedCovers((prev) => {
-      const next = new Set(prev);
-      next.delete(book.title + "|" + book.author);
-      return next;
-    });
-    clearCoverCacheForBook(book);
-    // Re-run enrichment for this single book
-    enrichCovers([book], (_, coverUrl) => {
-      setBooks((prev) => {
-        const realIdx = prev.indexOf(book);
-        if (realIdx < 0) return prev;
-        const next = [...prev];
-        next[realIdx] = {
-          ...next[realIdx],
-          cover_url: coverUrl,
-          thumbnail: coverUrl,
-          cover_source: "google_books",
-          cover_failed_at: null,
-        };
-        setLocalBooks(next);
-        return next;
-      });
-      if (userId && coverUrl) {
-        upsertBooksToCloud(userId, [
-          {
-            ...book,
-            cover_url: coverUrl,
-            thumbnail: coverUrl,
-            cover_source: "google_books",
-            cover_failed_at: null,
-          },
-        ]).catch(async (err) => {
-          await recordSyncError({ error: err, operation: "upsert", table: "books", userId });
-        });
-      }
-      toast.success(`Cover found for "${book.title}"`);
-    });
-  };
 
   /** Manual retry for cloud sync */
   const retryCloudSync = async () => {
@@ -693,7 +735,8 @@ const Library = () => {
             const normalizedStatus = normalizeStatus(book.status);
             const coverKey = book.title + "|" + book.author;
             const coverFailed = failedCovers.has(coverKey);
-            const coverSrc = book.cover_url || book.thumbnail;
+            const storageCover = getStorageCoverUrl(book.cover_storage_path);
+            const coverSrc = storageCover || book.cover_url || book.thumbnail;
             return (
               <div
                 key={book.id || `${buildBookDedupeKey(book)}-${index}`}
@@ -728,14 +771,8 @@ const Library = () => {
                     ) : (
                       <div className="flex flex-col items-center justify-center gap-1">
                         <BookOpen className="w-5 h-5 text-muted-foreground/40" />
-                        {(coverFailed || !book.thumbnail) && (
-                          <button
-                            onClick={() => retryCover(book)}
-                            className="text-[9px] text-primary/70 hover:text-primary flex items-center gap-0.5"
-                            title="Retry cover fetch"
-                          >
-                            <RefreshCw className="w-2.5 h-2.5" /> retry
-                          </button>
+                        {coverFailed && (
+                          <span className="text-[9px] text-muted-foreground">cover unavailable</span>
                         )}
                       </div>
                     )}

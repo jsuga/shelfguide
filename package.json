@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "sync:csv-template": "node scripts/syncCsvTemplate.mjs",
+    "backfill:cover-cache": "node scripts/backfillCoverCache.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:copilot": "node scripts/smoke-reading-copilot.mjs"
