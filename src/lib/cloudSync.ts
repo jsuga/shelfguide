@@ -527,7 +527,7 @@ export const upsertBooksToCloud = async (userId: string, books: CloudBookUpsert[
     return next as CloudBookUpsert;
   });
 
-  const cleanRows = rows.map(({ dedupe_key, created_at, updated_at, ...rest }) => rest);
+  const cleanRows = finalPayload.map(({ dedupe_key, created_at, updated_at, ...rest }: any) => rest);
 
   const attemptUpsert = (rows: CloudBookUpsert[]) =>
     (supabase as any).from("books").upsert(cleanRows, { onConflict: "user_id,dedupe_key", ignoreDuplicates: false });

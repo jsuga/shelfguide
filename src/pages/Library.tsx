@@ -389,7 +389,7 @@ const Library = () => {
       if (error) {
         await recordSyncError({ error, operation: "update", table: "books", userId });
         toast.error("Could not update rating. Saved locally and queued for retry.");
-        const payload = { ...book, rating: nextRating, explicit_nulls: nextRating == null ? ["rating"] : undefined };
+        const payload = { ...book, rating: nextRating, explicit_nulls: nextRating == null ? (["rating"] as Array<"rating">) : undefined };
         enqueueLibrarySync(userId, [payload], "rating_update");
         return;
       }
@@ -399,7 +399,7 @@ const Library = () => {
 
     setSavingRatings((prev) => ({ ...prev, [key]: false }));
     if (!userId) return;
-    const payload = { ...book, rating: nextRating, explicit_nulls: nextRating == null ? ["rating"] : undefined };
+    const payload = { ...book, rating: nextRating, explicit_nulls: nextRating == null ? (["rating"] as Array<"rating">) : undefined };
     enqueueLibrarySync(userId, [payload], "rating_update");
   };
 
