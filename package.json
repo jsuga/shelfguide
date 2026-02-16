@@ -9,6 +9,7 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
+    "sync:csv-template": "node scripts/syncCsvTemplate.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:copilot": "node scripts/smoke-reading-copilot.mjs"

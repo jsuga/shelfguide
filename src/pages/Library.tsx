@@ -6,16 +6,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Card, CardContent } from "@/components/ui/card";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Badge } from "@/components/ui/badge";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerFooter,
-  DrawerHeader,
-  DrawerTitle,
-} from "@/components/ui/drawer";
 import { toast } from "sonner";
 import StarRating from "@/components/StarRating";
 import StatusSelector from "@/components/StatusSelector";
@@ -30,7 +20,7 @@ import {
   retryAsync,
   upsertBooksToCloud,
 } from "@/lib/cloudSync";
-import { buildBookDedupeKey, normalizeDedupeValue } from "@/lib/bookDedupe";
+import { buildBookDedupeKey } from "@/lib/bookDedupe";
 import { applySort, type SortMode } from "@/lib/librarySort";
 import { clearCoverCacheForBook, enrichCovers } from "@/lib/coverEnrichment";
 
@@ -57,16 +47,6 @@ type LibraryBook = {
   cover_source?: string | null;
   cover_failed_at?: string | null;
   source?: string | null;
-};
-
-type ImportSummary = {
-  fileName: string;
-  rowsRead: number;
-  created: number;
-  updated: number;
-  skipped: number;
-  merged: number;
-  errors: number;
 };
 
 const db = supabase as any;
@@ -103,7 +83,6 @@ const Library = () => {
   const [isFirstInSeries, setIsFirstInSeries] = useState(false);
   const [status, setStatus] = useState("tbr");
   const [books, setBooks] = useState<LibraryBook[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editAuthor, setEditAuthor] = useState("");
@@ -114,28 +93,6 @@ const Library = () => {
   const [userId, setUserId] = useState<string | null>(null);
   const [userLabel, setUserLabel] = useState<string | null>(null);
   const [loadingBooks, setLoadingBooks] = useState(false);
-  const importInputRef = useRef<HTMLInputElement>(null);
-  const [importing, setImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState<string | null>(null);
-  const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
-  const [defaultImporting, setDefaultImporting] = useState(false);
-  const [defaultImportProgress, setDefaultImportProgress] = useState<string | null>(null);
-  const [defaultImportSummary, setDefaultImportSummary] = useState<ImportSummary | null>(null);
-  const [enrichOnImport, setEnrichOnImport] = useState(true);
-  const [importLogs, setImportLogs] = useState<
-    {
-      id: string;
-      source: string;
-      added_count: number;
-      updated_count: number;
-      failed_count: number;
-      failures: string[] | null;
-      created_at: string;
-    }[]
-  >([]);
-  const [loadingLogs, setLoadingLogs] = useState(false);
-  const [confirmClearLogs, setConfirmClearLogs] = useState(false);
-  const [selectedFailures, setSelectedFailures] = useState<string[] | null>(null);
   const [cloudNotice, setCloudNotice] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("title_az");
@@ -156,50 +113,6 @@ const Library = () => {
   const setLocalBooks = (nextBooks: LibraryBook[]) => {
     localStorage.setItem("reading-copilot-library", JSON.stringify(nextBooks));
   };
-
-  const loadImportLogs = useCallback(async (userIdValue: string | null) => {
-    if (!userIdValue) {
-      setImportLogs([]);
-      return;
-    }
-    setLoadingLogs(true);
-    const { data, error } = await db
-      .from("import_logs")
-      .select("id,source,added_count,updated_count,failed_count,failures,created_at")
-      .eq("user_id", userIdValue)
-      .order("created_at", { ascending: false })
-      .limit(6);
-    setLoadingLogs(false);
-    if (error) {
-      // import_logs table may not exist - don't show sync banner for this
-      if (import.meta.env.DEV) console.warn("[ShelfGuide] loadImportLogs error (non-critical):", error.message);
-      return;
-    }
-    setImportLogs(data || []);
-  }, []);
-
-  const clearImportLogs = async () => {
-    if (!userId) {
-      setImportLogs([]);
-      return;
-    }
-    const { error } = await db
-      .from("import_logs")
-      .delete()
-      .eq("user_id", userId);
-    if (error) {
-      toast.error("Could not clear import history.");
-      return;
-    }
-    setImportLogs([]);
-    toast.success("Import history cleared.");
-  };
-
-  useEffect(() => {
-    if (!confirmClearLogs) return;
-    const timer = setTimeout(() => setConfirmClearLogs(false), 8000);
-    return () => clearTimeout(timer);
-  }, [confirmClearLogs]);
 
   const loadBooks = useCallback(async (userIdValue: string | null) => {
     if (!userIdValue) {
@@ -338,7 +251,6 @@ const Library = () => {
       const username = (user?.user_metadata as { username?: string })?.username;
       setUserLabel(username || user?.email || null);
       await loadBooks(userIdValue);
-      await loadImportLogs(userIdValue);
       await flushAllPendingSync();
     };
 
@@ -350,7 +262,6 @@ const Library = () => {
       const username = (user?.user_metadata as { username?: string })?.username;
       setUserLabel(username || user?.email || null);
       void loadBooks(user?.id ?? null);
-      void loadImportLogs(user?.id ?? null);
       if (user?.id) {
         void flushAllPendingSync();
       }
@@ -359,7 +270,7 @@ const Library = () => {
     return () => {
       listener.subscription.unsubscribe();
     };
-  }, [loadBooks, loadImportLogs]);
+  }, [loadBooks]);
 
   // Library stats (using normalized statuses)
   const stats = useMemo(() => {
@@ -410,6 +321,27 @@ const Library = () => {
   };
 
   const getBookKey = (book: LibraryBook) => book.id || buildBookDedupeKey(book);
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const response = await fetch("/defaultBookLibrary.csv", { cache: "no-cache" });
+      if (!response.ok) {
+        throw new Error(`Template download failed (${response.status})`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "defaultBookLibrary.csv";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      if (import.meta.env.DEV) console.warn("[ShelfGuide] Template download failed:", error);
+      toast.error("Could not download the CSV template. Please try again.");
+    }
+  };
 
   const updateBookStatus = async (book: LibraryBook, nextStatus: string) => {
     const key = getBookKey(book);
@@ -550,537 +482,6 @@ const Library = () => {
     toast.success("Book removed.");
   };
 
-  const normalizeHeader = (value: string) =>
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[\s-]+/g, "_")
-      .replace(/[^a-z0-9_]/g, "")
-      .replace(/_+/g, "_");
-
-  const DEFAULT_CSV_HEADERS = [
-    "library_id",
-    "title",
-    "author",
-    "genre",
-    "series_name",
-    "is_first_in_series",
-    "status",
-  ];
-
-  const REQUIRED_DEFAULT_HEADERS = ["library_id", "title", "author"];
-
-  const parseBooleanish = (value: string | null | undefined): boolean => {
-    const raw = (value || "").trim().toLowerCase();
-    if (!raw) return false;
-    if (["1", "1.0", "true", "yes", "y"].includes(raw)) return true;
-    if (["0", "0.0", "false", "no", "n"].includes(raw)) return false;
-    return false;
-  };
-
-  const parseDefaultLibraryId = (value: string | null | undefined): number | null => {
-    const raw = (value || "").trim();
-    if (!raw) return null;
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed)) return null;
-    return parsed;
-  };
-
-  const stripGoodreadsIsbn = (raw: string) => {
-    return raw.replace(/^="?|"$/g, "").replace(/[^0-9xX]/g, "").trim();
-  };
-
-  const mapShelfToStatus = (shelf: string | null | undefined, bookshelves: string | null | undefined) => {
-    const normalized = normalizeDedupeValue(shelf || "");
-    if (normalized === "to-read") return "tbr";
-    if (normalized === "currently-reading") return "reading";
-    if (normalized === "read") return "finished";
-    const normalizedShelves = normalizeDedupeValue(bookshelves || "");
-    if (normalizedShelves.includes("currently-reading")) return "reading";
-    if (normalizedShelves.includes("read")) return "finished";
-    if (normalizedShelves.includes("to-read")) return "tbr";
-    return "tbr";
-  };
-
-  const parseGoodreadsDate = (value: string | null | undefined): string | null => {
-    const raw = (value || "").trim();
-    if (!raw) return null;
-    const asDate = new Date(raw);
-    if (Number.isNaN(asDate.getTime())) return null;
-    return asDate.toISOString().slice(0, 10);
-  };
-
-  const parsePublishedYear = (value: string | null | undefined): number | null => {
-    const raw = (value || "").trim();
-    if (!raw) return null;
-    const year = Number(raw);
-    if (!Number.isFinite(year)) return null;
-    if (year < 0 || year > 9999) return null;
-    return Math.trunc(year);
-  };
-
-  const hasGoodreadsHeaders = (headers: string[]) => {
-    const set = new Set(headers);
-    return set.has("title") && set.has("author");
-  };
-
-  const parseCsv = (text: string) => {
-    const rows: string[][] = [];
-    let current = "";
-    let inQuotes = false;
-    const row: string[] = [];
-
-    const pushCell = () => {
-      row.push(current);
-      current = "";
-    };
-
-    const pushRow = () => {
-      if (row.length > 0 || current.length > 0) {
-        pushCell();
-        rows.push([...row]);
-        row.length = 0;
-      }
-    };
-
-    for (let i = 0; i < text.length; i += 1) {
-      const char = text[i];
-      const next = text[i + 1];
-
-      if (char === '"') {
-        if (inQuotes && next === '"') {
-          current += '"';
-          i += 1;
-        } else {
-          inQuotes = !inQuotes;
-        }
-        continue;
-      }
-
-      if (!inQuotes && char === ",") {
-        pushCell();
-        continue;
-      }
-
-      if (!inQuotes && (char === "\n" || char === "\r")) {
-        if (char === "\r" && next === "\n") {
-          i += 1;
-        }
-        pushRow();
-        continue;
-      }
-
-      current += char;
-    }
-
-    pushRow();
-    return rows;
-  };
-
-  const handleLibraryUpload = async (file: File) => {
-    setDefaultImportSummary(null);
-    setDefaultImportProgress("Reading CSV file...");
-    setDefaultImporting(true);
-
-    try {
-      const text = await file.text();
-      const rows = parseCsv(text).filter((row) => row.some((cell) => cell.trim().length));
-      if (rows.length < 2) {
-        toast.error("CSV is empty or missing rows.");
-        setDefaultImportProgress(null);
-        return;
-      }
-
-      const headers = rows[0].map(normalizeHeader);
-      const missingHeaders = REQUIRED_DEFAULT_HEADERS.filter((header) => !headers.includes(header));
-      if (missingHeaders.length > 0) {
-        toast.error(
-          `Missing required headers: ${missingHeaders.join(", ")}. Expected: ${DEFAULT_CSV_HEADERS.join(", ")}.`
-        );
-        setDefaultImportProgress(null);
-        return;
-      }
-
-      const dataRows = rows.slice(1);
-      const rowsRead = dataRows.length;
-      const failures: string[] = [];
-      let skipped = 0;
-      let merged = 0;
-      let created = 0;
-      let updated = 0;
-
-      const incomingMap = new Map<string, LibraryBook>();
-      dataRows.forEach((row, index) => {
-        const record: Record<string, string> = {};
-        headers.forEach((header, colIndex) => {
-          record[header] = (row[colIndex] || "").trim();
-        });
-
-        const titleValue = record.title?.trim() || "";
-        const authorValue = record.author?.trim() || "";
-        const defaultId = parseDefaultLibraryId(record.library_id);
-        if (defaultId == null) {
-          skipped += 1;
-          failures.push(`Row ${index + 2}: missing or invalid library_id.`);
-          return;
-        }
-        if (!titleValue || !authorValue) {
-          skipped += 1;
-          failures.push(`Row ${index + 2}: missing title or author.`);
-          return;
-        }
-
-        const book: LibraryBook = {
-          title: titleValue,
-          author: authorValue,
-          genre: record.genre?.trim() || "",
-          series_name: record.series_name?.trim() || null,
-          is_first_in_series: parseBooleanish(record.is_first_in_series),
-          status: normalizeStatus(record.status || "tbr"),
-          default_library_id: defaultId,
-          source: "default_csv",
-        };
-
-        const key = buildBookDedupeKey(book);
-        if (incomingMap.has(key)) {
-          merged += 1;
-        }
-        incomingMap.set(key, book);
-      });
-
-      if (!incomingMap.size) {
-        toast.error("No valid rows found. Ensure library_id, title, and author are present.");
-        setDefaultImportProgress(null);
-        setDefaultImportSummary({
-          fileName: file.name,
-          rowsRead,
-          created,
-          updated,
-          skipped,
-          merged,
-          errors: failures.length,
-        });
-        return;
-      }
-
-      const existing = books;
-      const indexByKey = new Map<string, number>();
-      const nextBooks = [...existing];
-      existing.forEach((book, index) => {
-        indexByKey.set(buildBookDedupeKey(book), index);
-      });
-
-      const upserts: LibraryBook[] = [];
-      incomingMap.forEach((incoming) => {
-        const key = buildBookDedupeKey(incoming);
-        const existingIndex = indexByKey.get(key);
-        if (typeof existingIndex !== "number") {
-          created += 1;
-          upserts.push(incoming);
-          indexByKey.set(key, nextBooks.length);
-          nextBooks.push(incoming);
-          return;
-        }
-
-        updated += 1;
-        const current = nextBooks[existingIndex];
-        const mergedBook: LibraryBook = {
-          ...current,
-          ...incoming,
-          id: current?.id,
-          rating: current?.rating ?? incoming.rating ?? null,
-          cover_url: current?.cover_url || current?.thumbnail || incoming.cover_url || incoming.thumbnail || null,
-          thumbnail: current?.cover_url || current?.thumbnail || incoming.cover_url || incoming.thumbnail || null,
-          cover_source: current?.cover_source || incoming.cover_source || null,
-          cover_failed_at: current?.cover_failed_at || incoming.cover_failed_at || null,
-          source: current?.source || incoming.source,
-        };
-        nextBooks[existingIndex] = mergedBook;
-        upserts.push(mergedBook);
-      });
-
-      persistBooks(nextBooks);
-
-      const summary = {
-        fileName: file.name,
-        rowsRead,
-        created,
-        updated,
-        skipped,
-        merged,
-        errors: failures.length,
-      };
-      setDefaultImportSummary(summary);
-      setDefaultImportProgress(null);
-
-      if (userId) {
-        const userIdValue = await getAuthenticatedUserId();
-        if (!userIdValue) {
-          setCloudNotice("Not signed in. Saved locally only.");
-          toast.success(
-            `Import complete. Rows: ${summary.rowsRead}, created: ${summary.created}, updated: ${summary.updated}, skipped: ${summary.skipped}, merged: ${summary.merged}, errors: ${summary.errors}.`
-          );
-          return;
-        }
-
-        enqueueLibrarySync(userIdValue, upserts, "default_csv_upload", file.name);
-        setCloudNotice(`Syncing ${upserts.length} items...`);
-        const syncResult = await flushAllPendingSync();
-        if (syncResult.failed > 0) {
-          setCloudNotice("Cloud sync pending. We will retry automatically.");
-          toast.error(syncResult.errorMessages[0] || "Cloud sync failed. Using local-only data for now.");
-          return;
-        }
-        await loadBooks(userIdValue);
-        setCloudNotice(null);
-      }
-
-      toast.success(
-        `Import complete. Rows: ${summary.rowsRead}, created: ${summary.created}, updated: ${summary.updated}, skipped: ${summary.skipped}, merged: ${summary.merged}, errors: ${summary.errors}.`
-      );
-    } finally {
-      setDefaultImporting(false);
-    }
-  };
-
-  const handleGoodreadsImport = async (file: File) => {
-    toast.message("Goodreads import is coming soon. This preview may change.");
-    const userIdValue = await getAuthenticatedUserId();
-    if (!userIdValue) {
-      toast.error("Sign in to import Goodreads data into your cloud library.");
-      return;
-    }
-
-    setImportSummary(null);
-    setImportProgress("Reading CSV file...");
-
-    const text = await file.text();
-    const rows = parseCsv(text).filter((row) => row.some((cell) => cell.trim().length));
-    if (rows.length < 2) {
-      toast.error("CSV is empty or missing rows.");
-      setImportProgress(null);
-      return;
-    }
-
-    const headers = rows[0].map(normalizeHeader);
-    if (!hasGoodreadsHeaders(headers)) {
-      toast.error(
-        "Invalid Goodreads CSV header. Required columns: Title and Author. Optional: ISBN, ISBN13, Year Published, Exclusive Shelf, Bookshelves, Date Read, Date Added, My Rating."
-      );
-      setImportProgress(null);
-      return;
-    }
-
-    const dataRows = rows.slice(1);
-    const rowsRead = dataRows.length;
-    const failures: string[] = [];
-    let skipped = 0;
-
-    const records = dataRows.map((row) => {
-      const record: Record<string, string> = {};
-      headers.forEach((header, index) => {
-        record[header] = (row[index] || "").trim();
-      });
-      return record;
-    });
-
-    const parsed = records
-      .map((record, index) => {
-        const bookTitle = record.title?.trim() || "";
-        const bookAuthor = record.author?.trim() || "";
-        if (!bookTitle || !bookAuthor) {
-          skipped += 1;
-          failures.push(`Row ${index + 2}: missing Title or Author.`);
-          return null;
-        }
-
-        const shelf = record.exclusive_shelf || record.shelf || "";
-        const bookshelves = record.bookshelves || "";
-        const bookStatus = mapShelfToStatus(shelf, bookshelves);
-        const isbn = stripGoodreadsIsbn(record.isbn || "");
-        const isbn13 = stripGoodreadsIsbn(record.isbn13 || "");
-        const goodreadsBookId = (record.book_id || "").trim();
-        const rawRating = record.my_rating ? Number(record.my_rating) : null;
-        const rating =
-          Number.isFinite(rawRating) && rawRating >= 1 && rawRating <= 5
-            ? Math.trunc(rawRating)
-          : null;
-        const publishedYear = parsePublishedYear(
-          record.year_published || record.original_publication_year || ""
-        );
-        const dateRead = parseGoodreadsDate(record.date_read || null);
-
-        return {
-          title: bookTitle,
-          author: bookAuthor,
-          genre: record.genre?.trim() || "",
-          series_name: record.series_name?.trim() || null,
-          is_first_in_series: false,
-          status: bookStatus,
-          isbn: isbn || null,
-          isbn13: isbn13 || null,
-          goodreads_book_id: goodreadsBookId || null,
-          published_year: publishedYear,
-          rating: Number.isFinite(rating) ? rating : null,
-          date_read: dateRead,
-          shelf: shelf || bookshelves || null,
-          source: "goodreads_import",
-        } as LibraryBook;
-      })
-      .filter(Boolean) as LibraryBook[];
-
-    if (!parsed.length) {
-      toast.error("No valid rows found in Goodreads export.");
-      setImportProgress(null);
-      return;
-    }
-
-    setImporting(true);
-    setImportProgress(`Parsing complete. ${parsed.length} valid rows found. Starting import...`);
-
-    let created = 0;
-    let updated = 0;
-
-    try {
-      let enriched: LibraryBook[] = parsed;
-      if (enrichOnImport) {
-        setImportProgress("Enriching metadata and covers from Google Books...");
-        try {
-          const batches: LibraryBook[][] = [];
-          for (let i = 0; i < parsed.length; i += 8) {
-            batches.push(parsed.slice(i, i + 8));
-          }
-
-          const enrichedResults: LibraryBook[] = [];
-          let processed = 0;
-          for (const batch of batches) {
-            const { data, error } = await supabase.functions.invoke("goodreads-enrich", {
-              body: {
-                items: batch.map((item) => ({
-                  isbn: item.isbn,
-                  isbn13: item.isbn13,
-                  title: item.title,
-                  author: item.author,
-                })),
-              },
-            });
-            if (error) {
-              failures.push(`Metadata enrichment batch failed: ${error.message}`);
-            }
-            const results = (data?.results || []) as Array<{
-              description?: string | null;
-              pageCount?: number | null;
-              categories?: string[];
-              thumbnail?: string | null;
-            }>;
-            batch.forEach((item, idx) => {
-              const meta = results[idx];
-              const cover = meta?.thumbnail || item.cover_url || item.thumbnail || null;
-              enrichedResults.push({
-                ...item,
-                description: item.description || meta?.description || null,
-                page_count: item.page_count ?? meta?.pageCount ?? null,
-                genre: item.genre || meta?.categories?.[0] || "",
-                cover_url: cover,
-                thumbnail: cover,
-                cover_source: cover ? "google_books" : item.cover_source || null,
-                cover_failed_at: cover ? null : item.cover_failed_at || null,
-              });
-            });
-            processed += batch.length;
-            setImportProgress(`Enriched ${processed}/${parsed.length} books...`);
-          }
-          enriched = enrichedResults;
-        } catch (error) {
-          failures.push(`Metadata enrichment failed: ${(error as Error).message || "unknown error"}`);
-          setImportProgress("Metadata enrichment failed. Continuing import with CSV data.");
-        }
-      }
-
-      const existing = books;
-      const keyToBook = new Map<string, LibraryBook>();
-      existing.forEach((book) => {
-        keyToBook.set(buildBookDedupeKey(book), book);
-      });
-
-      const upserts: LibraryBook[] = [];
-      const seenKeys = new Set<string>();
-      for (const incoming of enriched) {
-        const key = buildBookDedupeKey(incoming);
-        if (seenKeys.has(key)) {
-          skipped += 1;
-          continue;
-        }
-        seenKeys.add(key);
-
-        const current = keyToBook.get(key);
-        if (!current) {
-          created += 1;
-          upserts.push(incoming);
-          keyToBook.set(key, incoming);
-          continue;
-        }
-
-        updated += 1;
-        const mergedRating = incoming.rating == null ? current.rating ?? null : incoming.rating;
-        upserts.push({
-          ...current,
-          ...incoming,
-          id: current.id,
-          rating: mergedRating,
-          genre: current.genre || incoming.genre || "",
-          cover_url: current.cover_url || current.thumbnail || incoming.cover_url || incoming.thumbnail || null,
-          thumbnail: current.cover_url || current.thumbnail || incoming.cover_url || incoming.thumbnail || null,
-          cover_source: current.cover_source || incoming.cover_source || null,
-          cover_failed_at: null,
-        });
-      }
-
-      if (!upserts.length) {
-        toast.error("No rows were eligible for import after dedupe.");
-        setImportProgress(null);
-        setImportSummary({ fileName: file.name, rowsRead, created, updated, skipped, merged: 0, errors: failures.length });
-        return;
-      }
-
-      setImportProgress("Writing books to cloud library...");
-      const { error } = await retryAsync(() => upsertBooksToCloud(userIdValue, upserts), 1, 350);
-      if (error) {
-        const syncError = await recordSyncError({ error, operation: "upsert", table: "books", userId: userIdValue });
-        failures.push(syncError.message);
-        enqueueLibrarySync(userIdValue, upserts, "goodreads_csv", file.name);
-        setCloudNotice(syncError.userMessage || "Goodreads import queued for background sync.");
-      }
-
-      await loadBooks(userIdValue);
-      await db.from("import_logs").insert({
-        user_id: userIdValue,
-        source: `goodreads_csv:${file.name}`,
-        added_count: created,
-        updated_count: updated,
-        failed_count: failures.length,
-        failures,
-      });
-      await loadImportLogs(userIdValue);
-
-      const summary = {
-        fileName: file.name,
-        rowsRead,
-        created,
-        updated,
-        skipped,
-        merged: 0,
-        errors: failures.length,
-      };
-      setImportSummary(summary);
-      setImportProgress(null);
-      toast.success(
-        `Goodreads import complete. Rows: ${summary.rowsRead}, created: ${summary.created}, updated: ${summary.updated}, skipped: ${summary.skipped}, merged: ${summary.merged}, errors: ${summary.errors}.`
-      );
-    } finally {
-      setImporting(false);
-    }
-  };
 
   /** Retry cover for a specific book */
   const retryCover = (book: LibraryBook) => {
@@ -1140,21 +541,13 @@ const Library = () => {
           <p className="text-muted-foreground mt-2 font-body">
             Your personal book collection
           </p>
+          <div className="mt-4">
+            <Button variant="outline" size="sm" onClick={() => void handleDownloadTemplate()}>
+              Download CSV Template
+            </Button>
+          </div>
         </div>
         <div className="flex flex-col items-end gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) {
-                void handleLibraryUpload(file);
-                event.target.value = "";
-              }
-            }}
-          />
           {/* Removed duplicate sign-out - sign out lives in the navbar only */}
           {userLabel && (
             <div className="flex items-center gap-3 text-xs text-muted-foreground font-body">
@@ -1219,45 +612,8 @@ const Library = () => {
               </div>
             </DialogContent>
           </Dialog>
-          <Button variant="outline" size="sm" className="text-xs px-3 h-8" onClick={() => fileInputRef.current?.click()}>
-            Import CSV
-          </Button>
         </div>
       </div>
-
-      <Card className="mb-6 border-border/60 bg-card/70">
-        <CardContent className="p-6">
-          <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Import</div>
-          <h2 className="font-display text-2xl font-bold mt-2">Import CSV (Recommended)</h2>
-          <p className="text-sm text-muted-foreground font-body mt-2">
-            Use the template CSV. Includes <span className="font-medium">library_id</span> for stable imports.
-          </p>
-          <p className="text-xs text-muted-foreground font-body mt-2">
-            If you're importing from Downloads, select your file (e.g., <span className="font-medium">defaultBookLibrary.csv</span>).
-          </p>
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <Button onClick={() => fileInputRef.current?.click()} disabled={defaultImporting}>
-              {defaultImporting ? "Importing..." : "Choose CSV from Downloads"}
-            </Button>
-            <Button variant="outline" size="sm" asChild>
-              <a href="/defaultBookLibrary.csv" download>
-                Download CSV template
-              </a>
-            </Button>
-          </div>
-          {defaultImportProgress && (
-            <p className="text-xs text-muted-foreground mt-3">{defaultImportProgress}</p>
-          )}
-          {defaultImportSummary && (
-            <div className="mt-3 rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs">
-              <div className="font-medium">Latest import: {defaultImportSummary.fileName}</div>
-              <div className="text-muted-foreground mt-1">
-                Rows {defaultImportSummary.rowsRead} | Created {defaultImportSummary.created} | Updated {defaultImportSummary.updated} | Skipped {defaultImportSummary.skipped} | Merged {defaultImportSummary.merged} | Errors {defaultImportSummary.errors}
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
       {cloudNotice && (
         <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground flex items-center justify-between gap-2">
@@ -1307,136 +663,6 @@ const Library = () => {
           </Select>
         </div>
       )}
-
-      <Accordion type="single" collapsible className="mb-10">
-        <AccordionItem value="advanced" className="border border-border/60 rounded-xl bg-card/70">
-          <AccordionTrigger className="px-6">
-            <div className="flex items-center gap-2">
-              <span className="font-display text-xl">Advanced</span>
-              <Badge variant="outline" className="text-[10px]">Coming soon</Badge>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent className="px-6 pb-6">
-            <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-              <Card className="border-border/60 bg-card/70">
-                <CardContent className="p-6">
-                  <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Connect / Import</div>
-                  <h2 className="font-display text-2xl font-bold mt-2">Goodreads Import (Preview)</h2>
-                  <p className="text-sm text-muted-foreground font-body mt-2">
-                    This is a preview CSV import (not an API connection yet). The recommended path is the default CSV above.
-                  </p>
-                  <ol className="list-decimal pl-5 mt-4 space-y-2 text-sm text-muted-foreground">
-                    <li>Go to Goodreads &gt; My Books &gt; Import and Export.</li>
-                    <li>Export your library to CSV.</li>
-                    <li>Upload the CSV here.</li>
-                  </ol>
-                  <div className="mt-4 flex items-center gap-3">
-                    <input
-                      ref={importInputRef}
-                      type="file"
-                      accept=".csv"
-                      className="hidden"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        if (file) {
-                          void handleGoodreadsImport(file);
-                          event.target.value = "";
-                        }
-                      }}
-                    />
-                    <Button onClick={() => importInputRef.current?.click()} disabled={importing}>
-                      {importing ? "Importing..." : "Import Goodreads CSV (Preview)"}
-                    </Button>
-                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Checkbox checked={enrichOnImport} onCheckedChange={(checked) => setEnrichOnImport(checked === true)} />
-                      Enrich metadata (Google Books)
-                    </label>
-                  </div>
-                  {importProgress && (
-                    <p className="text-xs text-muted-foreground mt-3">{importProgress}</p>
-                  )}
-                  {importSummary && (
-                    <div className="mt-3 rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs">
-                      <div className="font-medium">Latest import: {importSummary.fileName}</div>
-                      <div className="text-muted-foreground mt-1">
-                        Rows {importSummary.rowsRead} | Created {importSummary.created} | Updated {importSummary.updated} | Skipped {importSummary.skipped} | Merged {importSummary.merged} | Errors {importSummary.errors}
-                      </div>
-                    </div>
-                  )}
-                  {!userId && (
-                    <p className="text-xs text-muted-foreground mt-3">
-                      Sign in to save import history and enrich metadata securely.
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="border-border/60 bg-card/70">
-                <CardContent className="p-6">
-                  <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body">Import history</div>
-                  <div className="flex items-center justify-between mt-2">
-                    <h3 className="font-display text-xl font-bold">Recent imports</h3>
-                    <div className="flex items-center gap-2">
-                      {confirmClearLogs ? (
-                        <>
-                          <Button size="sm" variant="destructive" onClick={clearImportLogs}>Confirm clear</Button>
-                          <Button size="sm" variant="ghost" onClick={() => setConfirmClearLogs(false)}>Cancel</Button>
-                        </>
-                      ) : (
-                        <Button size="sm" variant="ghost" onClick={() => setConfirmClearLogs(true)}>Clear</Button>
-                      )}
-                    </div>
-                  </div>
-                  {loadingLogs ? (
-                    <p className="text-sm text-muted-foreground mt-4">Loading history...</p>
-                  ) : importLogs.length === 0 ? (
-                    <p className="text-sm text-muted-foreground mt-4">No imports yet. Upload a Goodreads CSV (preview) to see history.</p>
-                  ) : (
-                    <div className="mt-4 grid gap-3">
-                      {importLogs.map((log) => (
-                        <div key={log.id} className="rounded-lg border border-border/50 bg-background/70 p-3 text-sm">
-                          <div className="flex items-center justify-between text-xs text-muted-foreground">
-                            <span>{log.source.replace(/_/g, " ")}</span>
-                            <span>{new Date(log.created_at).toLocaleDateString()}</span>
-                          </div>
-                          <div className="mt-1">Added {log.added_count}, updated {log.updated_count}, failed {log.failed_count}</div>
-                          {log.failed_count > 0 && (
-                            <div className="mt-2 text-xs text-muted-foreground space-y-1">
-                              {(log.failures || []).slice(0, 3).map((failure) => (
-                                <div key={failure}>- {failure}</div>
-                              ))}
-                              {log.failed_count > 3 && (
-                                <Button size="sm" variant="outline" className="mt-1" onClick={() => setSelectedFailures(log.failures || [])}>View all</Button>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </section>
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
-
-      <Drawer open={!!selectedFailures} onOpenChange={(open) => !open && setSelectedFailures(null)}>
-        <DrawerContent>
-          <DrawerHeader>
-            <DrawerTitle>Import failures</DrawerTitle>
-            <p className="text-sm text-muted-foreground">These rows could not be imported.</p>
-          </DrawerHeader>
-          <div className="px-4 pb-4 max-h-[50vh] overflow-y-auto space-y-2 text-sm text-muted-foreground">
-            {(selectedFailures || []).map((failure, index) => (
-              <div key={`${failure}-${index}`}>- {failure}</div>
-            ))}
-          </div>
-          <DrawerFooter>
-            <Button variant="outline" onClick={() => setSelectedFailures(null)}>Close</Button>
-          </DrawerFooter>
-        </DrawerContent>
-      </Drawer>
 
       {displayedBooks.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">

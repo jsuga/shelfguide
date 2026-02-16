@@ -330,8 +330,9 @@ The primary import path uses the custom CSV schema with `library_id` for stable,
 ### Default CSV (recommended)
 
 1. Download the template at `/defaultBookLibrary.csv`.
-2. Save your file in Downloads (example filename: `defaultBookLibrary.csv`).
-3. Go to **My Library** -> **Import CSV (Recommended)** and upload the file.
+2. The app exposes a **Download CSV Template** button on **My Library**.
+
+Developer workflow: run `npm run sync:csv-template` to copy the latest Downloads template into `public/defaultBookLibrary.csv`, then commit it to publish.
 
 Required headers (case-insensitive, whitespace-tolerant):
 
@@ -443,7 +444,7 @@ If cloud write fails, import data is queued locally and retried in the backgroun
 
 You can download a starter CSV template from the app:
 
-- Go to **My Library** -> **Import CSV (Recommended)** -> **Download CSV template**
+- Go to **My Library** -> **Download CSV Template**
 - Or use the static asset directly: `/defaultBookLibrary.csv`
 
 Template file location in repo:
