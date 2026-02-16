@@ -612,6 +612,14 @@ const Library = () => {
               </div>
             </DialogContent>
           </Dialog>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs px-3 h-8"
+            onClick={() => toast.message("Import Library is coming soon. Use Download CSV Template for now.")}
+          >
+            Import Library
+          </Button>
         </div>
       </div>
 
