@@ -22,7 +22,7 @@ import {
 } from "@/lib/cloudSync";
 import { buildBookDedupeKey } from "@/lib/bookDedupe";
 import { applySort, type SortMode } from "@/lib/librarySort";
-import { enrichCovers } from "@/lib/coverEnrichment";
+import { enrichCovers, lookupCoverForBook, clearCoverCacheForBook } from "@/lib/coverEnrichment";
 
 type LibraryBook = {
   id?: string;
@@ -106,6 +106,7 @@ const Library = () => {
   const [savingRatings, setSavingRatings] = useState<Record<string, boolean>>({});
   const [savingStatuses, setSavingStatuses] = useState<Record<string, boolean>>({});
   const [coverRetryTokens, setCoverRetryTokens] = useState<Record<string, number>>({});
+  const [coverRetrying, setCoverRetrying] = useState<Record<string, boolean>>({});
   const csvInputRef = useRef<HTMLInputElement>(null);
   const coverCacheInFlightRef = useRef<Set<string>>(new Set());
   const coverCacheAttemptedRef = useRef<Set<string>>(new Set());
@@ -590,6 +591,26 @@ const Library = () => {
     return `${url}${joiner}retry=${token}`;
   };
 
+  const setBookCover = (bookId: string, coverUrl: string) => {
+    setBooks((prev) => {
+      const next = prev.map((entry) =>
+        entry.id === bookId
+          ? {
+              ...entry,
+              cover_url: coverUrl,
+              thumbnail: coverUrl,
+              cover_source: "google_books",
+              cover_failed_at: null,
+              cover_cache_status: null,
+              cover_cache_error: null,
+            }
+          : entry
+      );
+      setLocalBooks(next);
+      return next;
+    });
+  };
+
   const updateBookStatus = async (book: LibraryBook, nextStatus: string) => {
     const key = getBookKey(book);
     const updated = { ...book, status: nextStatus };
@@ -841,11 +862,8 @@ const Library = () => {
       </div>
 
       {cloudNotice && (
-        <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground flex items-center justify-between gap-2">
+        <div className="mb-4 rounded-lg border border-border/60 bg-card/60 px-4 py-2 text-xs text-muted-foreground">
           <span>{cloudNotice}</span>
-          <Button variant="outline" size="sm" className="h-7 text-xs px-2 shrink-0" onClick={() => void retryCloudSync()}>
-            Retry
-          </Button>
         </div>
       )}
 
@@ -953,51 +971,48 @@ const Library = () => {
                                 variant="outline"
                                 size="sm"
                                 className="h-6 px-2 text-[10px]"
-                                disabled={coverCacheInFlightRef.current.has(book.id)}
+                                disabled={coverRetrying[book.id] === true}
                                 onClick={async () => {
                                   if (!book.id) return;
-                                  if (coverCacheInFlightRef.current.has(book.id)) return;
-                                  const { data: sessionData } = await supabase.auth.getSession();
-                                  if (!sessionData.session) {
-                                    toast.message("Sign in to retry cover caching.");
-                                    return;
-                                  }
-                                  coverCacheInFlightRef.current.add(book.id);
+                                  if (coverRetrying[book.id]) return;
+                                  setCoverRetrying((prev) => ({ ...prev, [book.id as string]: true }));
+                                  clearCoverCacheForBook({
+                                    title: book.title,
+                                    author: book.author,
+                                    isbn: book.isbn ?? null,
+                                    isbn13: book.isbn13 ?? null,
+                                  });
                                   try {
-                                    const result = await supabase.functions.invoke("cache-book-cover", {
-                                      body: { book_id: book.id },
+                                    const foundCover = await lookupCoverForBook({
+                                      title: book.title,
+                                      author: book.author,
+                                      isbn: book.isbn ?? null,
+                                      isbn13: book.isbn13 ?? null,
                                     });
-                                    const error = (result as any)?.error;
-                                    const data = (result as any)?.data || {};
-                                    if (error || !data?.cover_storage_path) {
-                                      const message =
-                                        error?.message ||
-                                        data?.error ||
-                                        "Cover cache failed.";
-                                      if (!coverCacheErrorLoggedRef.current.has(book.id)) {
-                                        coverCacheErrorLoggedRef.current.add(book.id);
-                                        console.warn(
-                                          "[ShelfGuide] Manual cover retry failed:",
-                                          { bookId: book.id, error: message, status: error?.status }
-                                        );
-                                      }
-                                      toast.error("Cover retry failed.");
+                                    if (!foundCover) {
+                                      toast.error("Couldn't load cover. Try again.");
                                       return;
                                     }
-                                    const { data: refreshed, error: refreshError } = await db
-                                      .from("books")
-                                      .select("*")
-                                      .eq("id", book.id)
-                                      .maybeSingle();
-                                    if (!refreshError && refreshed) {
-                                      setBooks((prev) => {
-                                        const next = prev.map((entry) =>
-                                          entry.id === book.id ? { ...entry, ...(refreshed as LibraryBook) } : entry
-                                        );
-                                        setLocalBooks(next);
-                                        return next;
-                                      });
+
+                                    setBookCover(book.id, foundCover);
+
+                                    if (userId) {
+                                      const { error } = await db
+                                        .from("books")
+                                        .update({
+                                          cover_url: foundCover,
+                                          thumbnail: foundCover,
+                                          cover_source: "google_books",
+                                          cover_failed_at: null,
+                                          cover_cache_status: null,
+                                          cover_cache_error: null,
+                                        })
+                                        .eq("id", book.id);
+                                      if (error && import.meta.env.DEV) {
+                                        console.warn("[ShelfGuide] Cover update failed:", error);
+                                      }
                                     }
+
                                     setCoverRetryTokens((prev) => ({
                                       ...prev,
                                       [book.id as string]: Date.now(),
@@ -1008,13 +1023,13 @@ const Library = () => {
                                       next.delete(coverKey);
                                       return next;
                                     });
-                                    toast.success("Cover cached.");
+                                    toast.success("Cover updated.");
                                   } finally {
-                                    coverCacheInFlightRef.current.delete(book.id);
+                                    setCoverRetrying((prev) => ({ ...prev, [book.id as string]: false }));
                                   }
                                 }}
                               >
-                                Retry cover
+                                {coverRetrying[book.id] ? "Retrying..." : "Retry cover"}
                               </Button>
                             )}
                           </>

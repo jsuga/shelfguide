@@ -52,6 +52,11 @@ const rateLimitedFetch = async (url: string) => {
   return fetch(url);
 };
 
+const normalizeCoverUrl = (url: string | null) => {
+  if (!url) return null;
+  return url.replace(/^http:\/\//i, "https://");
+};
+
 const fetchGoogleCover = async (query: string): Promise<string | null> => {
   const url = new URL("https://www.googleapis.com/books/v1/volumes");
   url.searchParams.set("q", query);
@@ -63,7 +68,7 @@ const fetchGoogleCover = async (query: string): Promise<string | null> => {
     const data = await res.json();
     const item = data?.items?.[0]?.volumeInfo;
     const image = item?.imageLinks?.thumbnail || item?.imageLinks?.smallThumbnail || null;
-    return typeof image === "string" ? image : null;
+    return typeof image === "string" ? normalizeCoverUrl(image) : null;
   } catch {
     return null;
   }
@@ -200,6 +205,16 @@ export const enrichCovers = async <T extends EnrichableBook>(
   if (import.meta.env.DEV) {
     console.log(`[ShelfGuide] Cover enrichment complete: ${successCount} found, ${failCount} failed.`);
   }
+};
+
+export const lookupCoverForBook = async (book: {
+  title: string;
+  author: string;
+  isbn?: string | null;
+  isbn13?: string | null;
+}) => {
+  const url = await lookupCover(book);
+  return normalizeCoverUrl(url);
 };
 
 export const clearCoverCacheForBook = (book: {
