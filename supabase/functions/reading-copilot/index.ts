@@ -44,7 +44,7 @@ type Recommendation = Candidate & {
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-requested-with",
+    "authorization, x-client-info, apikey, content-type, x-requested-with, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
 const json = (body: unknown, status = 200) =>
@@ -67,7 +67,7 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 const getString = (value: unknown) => (typeof value === "string" ? value : "");
 
 const getStringArray = (value: unknown) =>
-  Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
+  Array.isArray(value) ? value.filter((entry: unknown) => typeof entry === "string") : [];
 
 const getClientIp = (req: Request) => {
   const forwarded = req.headers.get("x-forwarded-for");
@@ -85,11 +85,11 @@ const checkRateLimit = async (params: {
   ip: string | null;
   limit: number;
   windowMs: number;
-  client: any;
+  client: ReturnType<typeof createClient>;
 }) => {
   const now = new Date();
   const windowStart = new Date(now.getTime() - params.windowMs);
-  const { data, error } = await params.client
+  const { data, error } = await (params.client as any)
     .from("copilot_rate_limits")
     .select("*")
     .eq("key", params.key)
@@ -147,7 +147,7 @@ const buildProfile = (books: LibraryBook[]) => {
     tbr: 1,
   };
 
-  books.forEach((book) => {
+  books.forEach((book: LibraryBook) => {
     const weight = statusWeight[book.status] ?? 1;
     if (book.genre) {
       const key = normalize(book.genre);
@@ -200,8 +200,8 @@ const fetchGoogleBooks = async (query: string, limit = 18) => {
         genre: compact(categories[0]) || "General",
         tags: unique(
           categories
-            .flatMap((entry) => entry.split("/"))
-            .map((entry) => normalize(entry))
+            .flatMap((entry: string) => entry.split("/"))
+            .map((entry: string) => normalize(entry))
         ),
         summary: compact(getString(info.description)) || "No description available.",
         source: "Google Books",
@@ -232,7 +232,7 @@ const fetchOpenLibrary = async (query: string, limit = 18) => {
         title,
         author,
         genre: compact(subjects[0]) || "General",
-        tags: unique(subjects.map((entry) => normalize(entry))),
+        tags: unique(subjects.map((entry: string) => normalize(entry))),
         summary: "Open Library result - see listing for full description.",
         source: "Open Library",
       } as Candidate;
@@ -252,7 +252,7 @@ const extractJson = (text: string) => {
 };
 
 const buildFallback = (candidates: Candidate[], reasons: string[]): Recommendation[] => {
-  return candidates.slice(0, 4).map((candidate) => ({
+  return candidates.slice(0, 4).map((candidate: Candidate) => ({
     ...candidate,
     reasons: reasons.slice(0, 2),
     why_new: "A fresh pick outside your current shelf.",
@@ -260,12 +260,12 @@ const buildFallback = (candidates: Candidate[], reasons: string[]): Recommendati
 };
 
 const persistHistory = async (
-  client: any,
+  client: ReturnType<typeof createClient>,
   userId: string,
   recommendations: Recommendation[]
 ) => {
   if (!recommendations.length) return;
-  const payload = recommendations.map((rec) => ({
+  const payload = recommendations.map((rec: Recommendation) => ({
     user_id: userId,
     book_id: rec.id,
     title: rec.title,
@@ -281,7 +281,7 @@ const persistHistory = async (
 };
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -290,47 +290,72 @@ serve(async (req) => {
     return json({ error: "Supabase environment not configured." }, 500);
   }
 
+  // Auth: validate JWT from Authorization header
   const authHeader = req.headers.get("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return json({ error: "Missing authorization header." }, 401);
+  }
+
   const supabase = createClient(supabaseUrl, supabaseKey, {
     global: { headers: { Authorization: authHeader } },
   });
+
+  const token = authHeader.replace("Bearer ", "");
+  const { data: claimsData, error: claimsError } = await supabase.auth.getUser(token);
+  if (claimsError || !claimsData?.user) {
+    return json({ error: "Invalid or expired token." }, 401);
+  }
+  const user = claimsData.user;
+
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   const serviceClient = serviceKey
     ? createClient(supabaseUrl, serviceKey)
     : null;
 
+  const body = await req.json().catch(() => ({}));
   const {
     prompt = "",
     tags = [],
     surprise = 35,
     limit: reqLimit = 4,
-  } = await req.json().catch(() => ({}));
+    debug = false,
+  } = body;
 
-  const { data: authData } = await supabase.auth.getUser();
-  const user = authData?.user;
+  // Debug mode: return env diagnostics (safe - no secret values)
+  if (debug === true) {
+    const lovableKey = Deno.env.get("LOVABLE_API_KEY") || "";
+    const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") || "";
+    return json({
+      debug: true,
+      LOVABLE_API_KEY: lovableKey.length > 0,
+      lovable_key_len: lovableKey.length,
+      ANTHROPIC_API_KEY: anthropicKey.length > 0,
+      anthropic_key_len: anthropicKey.length,
+      SUPABASE_URL: !!supabaseUrl,
+      SUPABASE_ANON_KEY: !!supabaseKey,
+      SUPABASE_SERVICE_ROLE_KEY: !!serviceKey,
+      user_id: user.id,
+      env_keys: Object.keys(Deno.env.toObject()).filter(
+        (k) => !k.startsWith("_") && !k.includes("KEY") && !k.includes("SECRET")
+      ),
+    });
+  }
+
   const ip = getClientIp(req);
-  if (!user && !ip) {
-    return json({ error: "Unauthorized" }, 401);
-  }
 
-  const rateLimitClient = user ? supabase : serviceClient;
-  if (!rateLimitClient) {
-    return json({ error: "Rate limit unavailable." }, 503);
-  }
+  const rateLimitClient = serviceClient || supabase;
 
   const userLimit = Number(Deno.env.get("COPILOT_USER_LIMIT")) || 20;
-  const ipLimit = Number(Deno.env.get("COPILOT_IP_LIMIT")) || 8;
   const windowMs =
     Number(Deno.env.get("COPILOT_RPS_WINDOW_MS")) || 10 * 60 * 1000;
-  const rlLimit = user ? userLimit : ipLimit;
-  const key = user ? `user:${user.id}` : `ip:${ip}`;
+  const rlKey = `user:${user.id}`;
   const rateResult = await checkRateLimit({
-    key,
-    user_id: user?.id ?? null,
+    key: rlKey,
+    user_id: user.id,
     ip,
-    limit: rlLimit,
+    limit: userLimit,
     windowMs,
-    client: rateLimitClient as any,
+    client: rateLimitClient,
   });
   if (!rateResult.allowed) {
     return json(
@@ -342,23 +367,14 @@ serve(async (req) => {
     );
   }
 
-  if (!user) {
-    return json(
-      {
-        error: "Sign in required for personalized recommendations.",
-      },
-      401
-    );
-  }
-
   const [booksRes, prefsRes, feedbackRes] = await Promise.all([
-    supabase.from("books").select("*").eq("user_id", user.id),
-    supabase
+    (supabase as any).from("books").select("*").eq("user_id", user.id),
+    (supabase as any)
       .from("copilot_preferences")
       .select("*")
       .eq("user_id", user.id)
       .maybeSingle(),
-    supabase
+    (supabase as any)
       .from("copilot_feedback")
       .select("book_id,title,author,genre,tags,decision")
       .eq("user_id", user.id)
@@ -377,7 +393,7 @@ serve(async (req) => {
   const feedback = (feedbackRes.data || []) as Feedback[];
 
   const profile = buildProfile(books);
-  const topGenres = profile.topGenres.map((entry) => entry.key);
+  const topGenres = profile.topGenres.map((entry: { key: string }) => entry.key);
 
   const queryParts = [
     compact(prompt),
@@ -391,36 +407,37 @@ serve(async (req) => {
     fetchOpenLibrary(query, 18),
   ]);
 
-  const libraryTitles = new Set(books.map((book) => normalize(book.title)));
+  const libraryTitles = new Set(books.map((book: LibraryBook) => normalize(book.title)));
   const rejectedTitles = new Set(
-    feedback.filter((entry) => entry.decision === "rejected").map((entry) => normalize(entry.title))
+    feedback.filter((entry: Feedback) => entry.decision === "rejected").map((entry: Feedback) => normalize(entry.title))
   );
   const avoidedGenres = new Set(
-    (preferences.avoided_genres || []).map((genre) => normalize(genre))
+    (preferences.avoided_genres || []).map((genre: string) => normalize(genre))
   );
 
   const candidateMap = new Map<string, Candidate>();
-  [...googleResults, ...openLibraryResults].forEach((candidate) => {
-    const key = `${normalize(candidate.title)}-${normalize(candidate.author)}`;
-    if (candidateMap.has(key)) return;
+  [...googleResults, ...openLibraryResults].forEach((candidate: Candidate) => {
+    const mapKey = `${normalize(candidate.title)}-${normalize(candidate.author)}`;
+    if (candidateMap.has(mapKey)) return;
     if (libraryTitles.has(normalize(candidate.title))) return;
     if (rejectedTitles.has(normalize(candidate.title))) return;
     if (avoidedGenres.has(normalize(candidate.genre))) return;
-    candidateMap.set(key, candidate);
+    candidateMap.set(mapKey, candidate);
   });
 
   const candidates = Array.from(candidateMap.values()).slice(0, 12);
 
+  // Use Lovable AI Gateway (LOVABLE_API_KEY) as primary, fall back to Anthropic
+  const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
   const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
-  const anthropicModel = Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514";
   const warnings: string[] = [];
 
-  if (!anthropicKey) {
-    warnings.push("Anthropic key missing - using heuristic picks.");
+  if (!lovableApiKey && !anthropicKey) {
+    warnings.push("No AI key configured - using heuristic picks.");
     const fallback = buildFallback(candidates, [
-        "Based on your library and prompt.",
-        "Fits a popular reader-friendly theme.",
-      ]);
+      "Based on your library and prompt.",
+      "Fits a popular reader-friendly theme.",
+    ]);
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback,
@@ -430,10 +447,10 @@ serve(async (req) => {
     });
   }
 
-  const accepted = feedback.filter((entry) => entry.decision === "accepted").slice(0, 4);
-  const rejected = feedback.filter((entry) => entry.decision === "rejected").slice(0, 4);
+  const accepted = feedback.filter((entry: Feedback) => entry.decision === "accepted").slice(0, 4);
+  const rejected = feedback.filter((entry: Feedback) => entry.decision === "rejected").slice(0, 4);
 
-  const system = [
+  const systemPrompt = [
     "You are a ShelfGuide copilot that recommends books.",
     "Use the candidates list only; do not invent books.",
     "Return JSON only, matching the schema exactly.",
@@ -453,7 +470,7 @@ serve(async (req) => {
     profile,
     accepted,
     rejected,
-    candidates: candidates.map((candidate) => ({
+    candidates: candidates.map((candidate: Candidate) => ({
       id: candidate.id,
       title: candidate.title,
       author: candidate.author,
@@ -473,28 +490,72 @@ serve(async (req) => {
     },
   };
 
-  const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": anthropicKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: anthropicModel,
-      max_tokens: 800,
-      temperature: 0.7,
-      system,
-      messages: [{ role: "user", content: JSON.stringify(userPrompt) }],
-    }),
-  });
+  // Try Lovable AI Gateway first, then Anthropic
+  let llmResponse: Response | null = null;
+  let modelUsed = "";
 
-  if (!anthropicResponse.ok) {
-    warnings.push("Claude response failed - using heuristic picks.");
+  if (lovableApiKey) {
+    const gatewayModel = "google/gemini-2.5-flash";
+    try {
+      llmResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${lovableApiKey}`,
+        },
+        body: JSON.stringify({
+          model: gatewayModel,
+          max_tokens: 800,
+          temperature: 0.7,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: JSON.stringify(userPrompt) },
+          ],
+        }),
+      });
+      if (llmResponse.ok) {
+        modelUsed = gatewayModel;
+      } else {
+        llmResponse = null;
+        warnings.push("Lovable AI Gateway failed, trying fallback.");
+      }
+    } catch {
+      llmResponse = null;
+    }
+  }
+
+  if (!llmResponse && anthropicKey) {
+    const anthropicModel = Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514";
+    try {
+      llmResponse = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": anthropicKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: anthropicModel,
+          max_tokens: 800,
+          temperature: 0.7,
+          system: systemPrompt,
+          messages: [{ role: "user", content: JSON.stringify(userPrompt) }],
+        }),
+      });
+      if (llmResponse.ok) {
+        modelUsed = anthropicModel;
+      }
+    } catch {
+      llmResponse = null;
+    }
+  }
+
+  if (!llmResponse || !llmResponse.ok) {
+    warnings.push("AI response failed - using heuristic picks.");
     const fallback = buildFallback(candidates, [
-        "Based on your library and prompt.",
-        "Uses a fallback ranking when AI is unavailable.",
-      ]);
+      "Based on your library and prompt.",
+      "Uses a fallback ranking when AI is unavailable.",
+    ]);
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback,
@@ -504,20 +565,27 @@ serve(async (req) => {
     });
   }
 
-  const anthropicPayload = await anthropicResponse.json();
-  const content = Array.isArray(anthropicPayload.content)
-    ? anthropicPayload.content
-    : [];
-  const textBlock = content
-    .map((part: any) => (asRecord(part).text ? String(asRecord(part).text) : ""))
-    .join("\n");
+  const llmPayload = await llmResponse.json();
+
+  // Parse response - handle both OpenAI-compatible (Lovable Gateway) and Anthropic formats
+  let textBlock = "";
+  if (llmPayload.choices && Array.isArray(llmPayload.choices)) {
+    // OpenAI-compatible format (Lovable AI Gateway)
+    textBlock = llmPayload.choices[0]?.message?.content || "";
+  } else if (Array.isArray(llmPayload.content)) {
+    // Anthropic format
+    textBlock = llmPayload.content
+      .map((part: any) => (asRecord(part).text ? String(asRecord(part).text) : ""))
+      .join("\n");
+  }
+
   const parsed = extractJson(textBlock);
   if (!parsed || !Array.isArray(parsed.recommendations)) {
-    warnings.push("Claude response could not be parsed - using heuristic picks.");
+    warnings.push("AI response could not be parsed - using heuristic picks.");
     const fallback = buildFallback(candidates, [
-        "Based on your library and prompt.",
-        "AI response was incomplete, so we used a fallback.",
-      ]);
+      "Based on your library and prompt.",
+      "AI response was incomplete, so we used a fallback.",
+    ]);
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback,
@@ -530,12 +598,12 @@ serve(async (req) => {
   const recs = parsed.recommendations
     .map((rec: any) => {
       const recRecord = asRecord(rec);
-      const match = candidates.find((candidate) => candidate.id === recRecord.id);
+      const match = candidates.find((candidate: Candidate) => candidate.id === recRecord.id);
       if (!match) return null;
       return {
         ...match,
         reasons: Array.isArray(recRecord.reasons)
-          ? recRecord.reasons.map((entry) => String(entry)).slice(0, 3)
+          ? recRecord.reasons.map((entry: unknown) => String(entry)).slice(0, 3)
           : [],
         why_new: typeof recRecord.why_new === "string" ? recRecord.why_new : "",
       } as Recommendation;
@@ -544,11 +612,11 @@ serve(async (req) => {
     .slice(0, Math.max(1, Math.min(6, Number(reqLimit) || 4))) as Recommendation[];
 
   if (recs.length === 0) {
-    warnings.push("No Claude recommendations found - using heuristic picks.");
+    warnings.push("No AI recommendations matched candidates - using heuristic picks.");
     const fallback = buildFallback(candidates, [
-        "Based on your library and prompt.",
-        "AI response did not include matching candidates.",
-      ]);
+      "Based on your library and prompt.",
+      "AI response did not include matching candidates.",
+    ]);
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback,
@@ -564,6 +632,6 @@ serve(async (req) => {
     profile,
     warnings,
     llm_used: true,
-    model: anthropicModel,
+    model: modelUsed,
   });
 });

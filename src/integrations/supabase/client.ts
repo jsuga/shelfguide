@@ -15,3 +15,9 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
     autoRefreshToken: true,
   }
 });
+
+// Expose supabase client on window for dev debugging
+// Usage: window.supabase.functions.invoke("reading-copilot", { body: { debug: true } })
+if (import.meta.env.DEV || import.meta.env.VITE_DEBUG === "true") {
+  (window as any).supabase = supabase;
+}
