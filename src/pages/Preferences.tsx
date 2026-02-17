@@ -231,6 +231,65 @@ const Preferences = () => {
           )}
         </section>
 
+        <section className="rounded-xl border border-border/60 bg-card/70 p-6">
+          <motion.div {...fadeInUp} className="text-center mb-6">
+            <h2 className="font-display text-3xl font-bold mb-2">Choose Your Atmosphere</h2>
+            <p className="text-muted-foreground text-sm font-body">
+              Each genre transforms the entire reading experience
+            </p>
+          </motion.div>
+          <div className="mb-6 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+            <div>
+              <Label className="text-sm text-muted-foreground">Theme</Label>
+              <p className="font-body text-sm text-muted-foreground">
+                Saved to your account and synced across devices.
+              </p>
+            </div>
+            <Select value={theme} onValueChange={(v) => setTheme(v as GenreTheme)}>
+              <SelectTrigger className="w-full sm:w-56">
+                <SelectValue placeholder="Select theme" />
+              </SelectTrigger>
+              <SelectContent>
+                {themeOptions.map((opt) => (
+                  <SelectItem key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="max-h-[560px] overflow-y-auto pr-1 space-y-4">
+            {themeCards.map((t, i) => (
+              <motion.div key={t.id} {...fadeInUp} transition={{ duration: 0.5, delay: i * 0.05 }}>
+                <button
+                  onClick={() => { setTheme(t.id); toast.success(`${t.name} theme applied!`); }}
+                  className={`w-full text-left rounded-xl overflow-hidden border-2 transition-all ${
+                    theme === t.id ? "border-primary shadow-lg ring-2 ring-primary/30" : "border-transparent hover:border-border"
+                  }`}
+                >
+                  <div className="h-32 relative overflow-hidden">
+                    <img
+                      src={getImageSrc(t.id, t.images[0] || getThemeFallback(t.id))}
+                      onError={() => onImageError(t.images[0] || "")}
+                      alt={`${t.name} theme preview`}
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                    <div className="absolute inset-0" style={{ background: `linear-gradient(145deg, ${t.colors.bg}cc, ${t.colors.accent}99)` }} />
+                    <div className="absolute inset-x-3 top-3 flex items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-white/80 font-body">
+                      <span className="w-2 h-2 rounded-full" style={{ background: t.colors.primary }} />
+                      {t.name}
+                    </div>
+                  </div>
+                  <div className="p-4 bg-card">
+                    <h3 className="font-display font-bold text-sm">{t.name}</h3>
+                    <p className="text-xs text-muted-foreground mt-1 font-body">{t.description}</p>
+                    <p className="text-[11px] text-muted-foreground/80 mt-2 font-body">{t.detail}</p>
+                  </div>
+                </button>
+              </motion.div>
+            ))}
+          </div>
+        </section>
       </div>
 
       {/* Danger Zone - Delete Library */}
@@ -266,47 +325,7 @@ const Preferences = () => {
         </DialogContent>
       </Dialog>
 
-      <section className="py-16">
-        <div className="container mx-auto px-0">
-          <motion.div {...fadeInUp} className="text-center mb-10">
-            <h2 className="font-display text-3xl md:text-4xl font-bold mb-3">Choose Your Atmosphere</h2>
-            <p className="text-muted-foreground text-lg max-w-xl mx-auto font-body">Each genre transforms the entire reading experience</p>
-          </motion.div>
-          <div className="mb-8 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 max-w-3xl mx-auto">
-            <div><Label className="text-sm text-muted-foreground">Theme</Label><p className="font-body text-sm text-muted-foreground">{userEmail ? "Saved to your account and synced across devices." : "Sign in to sync your theme across devices."}</p></div>
-            <Select value={theme} onValueChange={(v) => setTheme(v as GenreTheme)}>
-              <SelectTrigger className="w-full sm:w-64"><SelectValue placeholder="Select theme" /></SelectTrigger>
-              <SelectContent>{themeOptions.map((opt) => <SelectItem key={opt.id} value={opt.id}>{opt.label}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4 max-w-6xl mx-auto">
-            {themeCards.map((t, i) => (
-              <motion.div key={t.id} {...fadeInUp} transition={{ duration: 0.5, delay: i * 0.1 }}>
-                <button onClick={() => { setTheme(t.id); toast.success(`${t.name} theme applied!`); }}
-                  className={`w-full text-left rounded-xl overflow-hidden border-2 transition-all hover:scale-[1.03] ${theme === t.id ? "border-primary shadow-lg ring-2 ring-primary/30" : "border-transparent hover:border-border"}`}>
-                  <div className="h-28 relative overflow-hidden">
-                    <img src={getImageSrc(t.id, t.images[0] || getThemeFallback(t.id))} onError={() => onImageError(t.images[0] || "")} alt={`${t.name} theme preview`} className="absolute inset-0 h-full w-full object-cover" />
-                    <div className="absolute inset-0" style={{ background: `linear-gradient(145deg, ${t.colors.bg}cc, ${t.colors.accent}99)` }} />
-                    <div className="absolute inset-x-3 top-3 flex items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-white/80 font-body"><span className="w-2 h-2 rounded-full" style={{ background: t.colors.primary }} />{t.name}</div>
-                    <div className="absolute bottom-3 left-3 flex gap-2">
-                      {t.images.slice(0, 4).map((img, index) => (
-                        <div key={`${t.id}-${index}`} className="h-8 w-10 rounded-md border border-white/30 bg-white/10 shadow-lg overflow-hidden">
-                          <img src={getImageSrc(t.id, img)} onError={() => onImageError(img)} alt="" className="h-full w-full object-cover" />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="p-3 bg-card">
-                    <h3 className="font-display font-bold text-sm">{t.name}</h3>
-                    <p className="text-xs text-muted-foreground mt-1 font-body">{t.description}</p>
-                    <p className="text-[11px] text-muted-foreground/80 mt-2 font-body">{t.detail}</p>
-                  </div>
-                </button>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
+      
     </main>
   );
 };
