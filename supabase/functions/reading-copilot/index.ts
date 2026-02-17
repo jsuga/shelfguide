@@ -15,6 +15,7 @@ type Preferences = {
   preferred_pace: string | null;
   preferred_formats: string[];
   notes: string | null;
+  atmosphere?: string | null;
 };
 
 type Feedback = {
@@ -389,6 +390,7 @@ serve(async (req) => {
     preferred_formats: [],
     preferred_pace: null,
     notes: null,
+    atmosphere: "cozy",
   }) as Preferences;
   const feedback = (feedbackRes.data || []) as Feedback[];
 
@@ -478,6 +480,7 @@ serve(async (req) => {
         ? "Prefer recommendations aligned with top genres."
         : "Balance familiar and fresh picks.",
     preferences,
+    atmosphere: preferences.atmosphere || "cozy",
     profile,
     accepted,
     rejected,

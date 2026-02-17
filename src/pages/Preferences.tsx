@@ -9,7 +9,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -42,6 +41,14 @@ const themeCards: {
 ];
 
 const fadeInUp = { initial: { opacity: 0, y: 30 }, whileInView: { opacity: 1, y: 0 }, viewport: { once: true, margin: "-80px" as const }, transition: { duration: 0.6 } };
+const ATMOSPHERE_KEY = "shelfguide-atmosphere";
+const atmosphereOptions = [
+  { value: "cozy", label: "Cozy", description: "Soft lighting, warm drinks, and calm pages." },
+  { value: "dark_academia", label: "Dark Academia", description: "Candlelit libraries, moody classics, and late-night study." },
+  { value: "epic_fantasy", label: "Epic Fantasy", description: "Sweeping quests, mythic stakes, and grand worlds." },
+  { value: "sci_fi_neon", label: "Sci-Fi Neon", description: "High-tech futures, glowing skylines, and big ideas." },
+  { value: "beach_read", label: "Beach Read", description: "Light, breezy stories for effortless escapes." },
+];
 const parseList = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
 const listToString = (value: string[] | null | undefined) => Array.isArray(value) ? value.join(", ") : "";
 
@@ -60,6 +67,7 @@ const Preferences = () => {
   const [preferredFormats, setPreferredFormats] = useState("");
   const [preferredPace, setPreferredPace] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
+  const [atmosphere, setAtmosphere] = useState("cozy");
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [pendingSync, setPendingSync] = useState(getPendingSyncCounts(null));
   const [syncingNow, setSyncingNow] = useState(false);
@@ -137,7 +145,16 @@ const Preferences = () => {
           setPreferredPace(prefs.preferred_pace ?? null);
           setNotes(prefs.notes ?? "");
           if (prefs.ui_theme) setTheme(prefs.ui_theme as GenreTheme);
+          if (prefs.atmosphere) {
+            setAtmosphere(String(prefs.atmosphere));
+          } else {
+            const localAtmosphere = localStorage.getItem(ATMOSPHERE_KEY);
+            setAtmosphere(localAtmosphere || "cozy");
+          }
         }
+      } else {
+        const localAtmosphere = localStorage.getItem(ATMOSPHERE_KEY);
+        setAtmosphere(localAtmosphere || "cozy");
       }
     };
     void init();
@@ -158,8 +175,17 @@ const Preferences = () => {
             setPreferredPace(prefs.preferred_pace ?? null);
             setNotes(prefs.notes ?? "");
             if (prefs.ui_theme) setTheme(prefs.ui_theme as GenreTheme);
+            if (prefs.atmosphere) {
+              setAtmosphere(String(prefs.atmosphere));
+            } else {
+              const localAtmosphere = localStorage.getItem(ATMOSPHERE_KEY);
+              setAtmosphere(localAtmosphere || "cozy");
+            }
           }
         })();
+      } else {
+        const localAtmosphere = localStorage.getItem(ATMOSPHERE_KEY);
+        setAtmosphere(localAtmosphere || "cozy");
       }
     });
     return () => { listener.subscription.unsubscribe(); };
@@ -194,14 +220,28 @@ const Preferences = () => {
   };
 
   const handleSavePreferences = async () => {
-    if (!userEmail) { toast.error("Sign in to save preferences."); return; }
     setSavingPrefs(true);
     const userId = await getAuthenticatedUserId();
-    if (!userId) { toast.error("Sign in to save preferences."); setSavingPrefs(false); return; }
-    const { error } = await db.from("copilot_preferences").upsert({ user_id: userId, preferred_genres: parseList(preferredGenres), avoided_genres: parseList(avoidedGenres), preferred_formats: parseList(preferredFormats), preferred_pace: preferredPace, notes: notes.trim() || null, ui_theme: theme, updated_at: new Date().toISOString() });
+    localStorage.setItem(ATMOSPHERE_KEY, atmosphere);
+    if (!userId) {
+      setSavingPrefs(false);
+      toast.success("Atmosphere saved locally.");
+      return;
+    }
+    const { error } = await db.from("copilot_preferences").upsert({
+      user_id: userId,
+      preferred_genres: parseList(preferredGenres),
+      avoided_genres: parseList(avoidedGenres),
+      preferred_formats: parseList(preferredFormats),
+      preferred_pace: preferredPace,
+      notes: notes.trim() || null,
+      ui_theme: theme,
+      atmosphere,
+      updated_at: new Date().toISOString(),
+    });
     setSavingPrefs(false);
     if (error) { toast.error("Could not save preferences."); return; }
-    toast.success("Preferences updated.");
+    toast.success("Atmosphere updated.");
   };
 
   return (
@@ -262,30 +302,45 @@ const Preferences = () => {
         </section>
 
         <section className="rounded-xl border border-border/60 bg-card/70 p-6">
-          <div className="flex items-center gap-3 mb-4"><Palette className="w-5 h-5 text-primary" /><h2 className="font-display text-2xl font-bold">Reading Preferences</h2></div>
-          <p className="text-sm text-muted-foreground font-body mb-6">These signals guide the copilot and stay private to your account.</p>
-          {userEmail ? (
-            <div className="grid gap-4">
-              <div className="grid gap-2"><Label htmlFor="preferred-genres">Preferred genres</Label><Input id="preferred-genres" value={preferredGenres} onChange={(e) => setPreferredGenres(e.target.value)} placeholder="Fantasy, Science Fiction, Cozy Mystery" /></div>
-              <div className="grid gap-2"><Label htmlFor="avoided-genres">Avoided genres</Label><Input id="avoided-genres" value={avoidedGenres} onChange={(e) => setAvoidedGenres(e.target.value)} placeholder="Horror, True Crime" /></div>
-              <div className="grid gap-2"><Label htmlFor="preferred-formats">Preferred formats</Label><Input id="preferred-formats" value={preferredFormats} onChange={(e) => setPreferredFormats(e.target.value)} placeholder="Audiobook, Hardcover, Ebook" /></div>
-              <div className="grid gap-2">
-                <Label>Reading pace</Label>
-                <Select value={preferredPace ?? ""} onValueChange={(v) => setPreferredPace(v || null)}>
-                  <SelectTrigger><SelectValue placeholder="Select pace" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="slow">Slow and immersive</SelectItem>
-                    <SelectItem value="steady">Steady</SelectItem>
-                    <SelectItem value="fast">Fast and bingeable</SelectItem>
-                    <SelectItem value="no_preference">No preference</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2"><Label htmlFor="notes">Anything else?</Label><Textarea id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Examples: shorter standalone books, diverse authors, minimal gore." className="min-h-[90px]" /></div>
-              <div className="flex items-center justify-end"><Button onClick={handleSavePreferences} disabled={savingPrefs}>{savingPrefs ? "Saving..." : "Save preferences"}</Button></div>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground font-body">Sign in to save your reading preferences.</p>
+          <div className="flex items-center gap-3 mb-4"><Palette className="w-5 h-5 text-primary" /><h2 className="font-display text-2xl font-bold">Choose Your Atmosphere</h2></div>
+          <p className="text-sm text-muted-foreground font-body mb-6">
+            Pick the vibe you want to read in — it shapes how ShelfGuide frames recommendations.
+          </p>
+          <div className="grid gap-3">
+            {atmosphereOptions.map((option) => {
+              const selected = atmosphere === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setAtmosphere(option.value)}
+                  className={`w-full text-left rounded-lg border px-4 py-3 transition-all ${
+                    selected
+                      ? "border-primary bg-primary/10 shadow-sm"
+                      : "border-border/60 bg-background/60 hover:border-primary/60"
+                  }`}
+                  aria-pressed={selected}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-medium">{option.label}</div>
+                      <div className="text-xs text-muted-foreground mt-1">{option.description}</div>
+                    </div>
+                    <div className={`mt-1 h-3 w-3 rounded-full border ${selected ? "border-primary bg-primary" : "border-border/60"}`} />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center justify-end mt-4">
+            <Button onClick={handleSavePreferences} disabled={savingPrefs}>
+              {savingPrefs ? "Saving..." : "Save atmosphere"}
+            </Button>
+          </div>
+          {!userEmail && (
+            <p className="text-xs text-muted-foreground font-body mt-3">
+              Not signed in — saved on this device only.
+            </p>
           )}
         </section>
       </div>

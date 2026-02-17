@@ -111,6 +111,7 @@ const Library = () => {
   const [coverRetryTokens, setCoverRetryTokens] = useState<Record<string, number>>({});
   const [coverRetrying, setCoverRetrying] = useState<Record<string, boolean>>({});
   const [importSummary, setImportSummary] = useState<string | null>(null);
+  const [refreshingCovers, setRefreshingCovers] = useState(false);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const coverCacheInFlightRef = useRef<Set<string>>(new Set());
   const coverCacheAttemptedRef = useRef<Set<string>>(new Set());
@@ -711,6 +712,135 @@ const Library = () => {
     });
   };
 
+  const setBookCoverByKey = (book: LibraryBook, coverUrl: string) => {
+    const targetKey = buildBookDedupeKey(book);
+    setBooks((prev) => {
+      const next = prev.map((entry) =>
+        buildBookDedupeKey(entry) === targetKey
+          ? {
+              ...entry,
+              cover_url: coverUrl,
+              thumbnail: coverUrl,
+              cover_source: "google_books",
+              cover_failed_at: null,
+              cover_cache_status: null,
+              cover_cache_error: null,
+            }
+          : entry
+      );
+      setLocalBooks(next);
+      return next;
+    });
+  };
+
+  const isMissingCover = (book: LibraryBook) => {
+    const hasCover =
+      !!book.cover_url ||
+      !!book.thumbnail ||
+      !!book.cover_storage_path;
+    return !hasCover;
+  };
+
+  const withBackoffRetry = async <T,>(fn: () => Promise<T>, retries = 1, baseDelayMs = 500) => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        lastError = err;
+        const message = String(err?.message || err || "");
+        const status = err?.status || err?.statusCode || null;
+        const shouldRetry = status === 429 || /timeout|timed out|rate limit|too many/i.test(message);
+        if (!shouldRetry || attempt >= retries) break;
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    throw lastError;
+  };
+
+  const refreshMissingCovers = async () => {
+    if (refreshingCovers) return;
+    setRefreshingCovers(true);
+
+    const missing = books.filter(isMissingCover);
+    if (missing.length === 0) {
+      setRefreshingCovers(false);
+      toast.message("All books already have covers.");
+      return;
+    }
+
+    const concurrency = 4;
+    const batchSize = 12;
+    let updatedCount = 0;
+    let stillMissing = 0;
+
+    const processBatch = async (batch: LibraryBook[]) => {
+      let cursor = 0;
+      const runWorker = async () => {
+        while (cursor < batch.length) {
+          const current = batch[cursor];
+          cursor += 1;
+          try {
+            const foundCover = await withBackoffRetry(
+              () =>
+                lookupCoverForBook({
+                  title: current.title,
+                  author: current.author,
+                  isbn: current.isbn ?? null,
+                  isbn13: current.isbn13 ?? null,
+                }),
+              1,
+              650
+            );
+            if (!foundCover) {
+              stillMissing += 1;
+              continue;
+            }
+            updatedCount += 1;
+
+            if (current.id) setBookCover(current.id, foundCover);
+            else setBookCoverByKey(current, foundCover);
+
+            if (userId && current.id) {
+              const { error } = await db
+                .from("books")
+                .update({
+                  cover_url: foundCover,
+                  thumbnail: foundCover,
+                  cover_source: "google_books",
+                  cover_failed_at: null,
+                  cover_cache_status: null,
+                  cover_cache_error: null,
+                })
+                .eq("id", current.id);
+              if (error && import.meta.env.DEV) {
+                console.warn("[ShelfGuide] Refresh missing covers update failed:", error);
+              }
+            }
+          } catch (err) {
+            stillMissing += 1;
+            if (import.meta.env.DEV) {
+              console.warn("[ShelfGuide] Refresh missing covers lookup failed:", err);
+            }
+          }
+        }
+      };
+
+      const workers = Array.from({ length: Math.min(concurrency, batch.length) }, () => runWorker());
+      await Promise.all(workers);
+    };
+
+    for (let i = 0; i < missing.length; i += batchSize) {
+      const batch = missing.slice(i, i + batchSize);
+      await processBatch(batch);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    setRefreshingCovers(false);
+    toast.success(`Updated ${updatedCount} covers. ${stillMissing} still missing.`);
+  };
+
   const updateBookStatus = async (book: LibraryBook, nextStatus: string) => {
     const key = getBookKey(book);
     const updated = { ...book, status: nextStatus };
@@ -979,7 +1109,7 @@ const Library = () => {
 
       {/* Stats banner */}
       {books.length > 0 && (
-        <div className="mb-6 flex flex-wrap gap-4 rounded-xl border border-border/60 bg-card/70 px-5 py-3 text-sm font-body">
+        <div className="mb-6 flex flex-wrap items-center gap-4 rounded-xl border border-border/60 bg-card/70 px-5 py-3 text-sm font-body">
           <span><strong>{stats.total}</strong> books</span>
           <span className="text-muted-foreground">|</span>
           <span><strong>{stats.tbr}</strong> TBR</span>
@@ -987,6 +1117,17 @@ const Library = () => {
           <span><strong>{stats.read}</strong> Finished</span>
           <span className="text-muted-foreground">|</span>
           <span><strong>{stats.authors}</strong> authors</span>
+          <div className="ml-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-8"
+              onClick={() => void refreshMissingCovers()}
+              disabled={refreshingCovers}
+            >
+              {refreshingCovers ? "Refreshing..." : "Refresh Missing Covers"}
+            </Button>
+          </div>
         </div>
       )}
 
