@@ -255,7 +255,7 @@ const buildFallback = (candidates: Candidate[], reasons: string[]): Recommendati
   return candidates.slice(0, 4).map((candidate: Candidate) => ({
     ...candidate,
     reasons: reasons.slice(0, 2),
-    why_new: "A fresh pick outside your current shelf.",
+    why_new: "A fresh pick that might surprise you.",
   }));
 };
 
@@ -433,10 +433,10 @@ serve(async (req) => {
   const warnings: string[] = [];
 
   if (!lovableApiKey && !anthropicKey) {
-    warnings.push("No AI key configured - using heuristic picks.");
+    warnings.push("Using curated picks while we tune the AI.");
     const fallback = buildFallback(candidates, [
-      "Based on your library and prompt.",
-      "Fits a popular reader-friendly theme.",
+      "Matches your library's vibe.",
+      "A popular reader favorite.",
     ]);
     await persistHistory(supabase, user.id, fallback);
     return json({
@@ -455,6 +455,9 @@ serve(async (req) => {
     "Use the candidates list only; do not invent books.",
     "Return JSON only, matching the schema exactly.",
     "Use the surprise value to balance familiar vs. diverse picks.",
+    "Each reason must be max 12 words. Give exactly 2 reasons per book.",
+    "why_new must be a short personable sentence, max 18 words, like 'Feels like a cozy romance with a sharp twist.'",
+    "Be concise, warm, and personable. No jargon.",
   ].join(" ");
 
   const userPrompt = {
@@ -551,10 +554,10 @@ serve(async (req) => {
   }
 
   if (!llmResponse || !llmResponse.ok) {
-    warnings.push("AI response failed - using heuristic picks.");
+    warnings.push("Using curated picks while we tune the AI.");
     const fallback = buildFallback(candidates, [
-      "Based on your library and prompt.",
-      "Uses a fallback ranking when AI is unavailable.",
+      "Matches your library's vibe.",
+      "Curated while AI is warming up.",
     ]);
     await persistHistory(supabase, user.id, fallback);
     return json({
@@ -581,10 +584,10 @@ serve(async (req) => {
 
   const parsed = extractJson(textBlock);
   if (!parsed || !Array.isArray(parsed.recommendations)) {
-    warnings.push("AI response could not be parsed - using heuristic picks.");
+    warnings.push("Using curated picks while we tune the AI.");
     const fallback = buildFallback(candidates, [
-      "Based on your library and prompt.",
-      "AI response was incomplete, so we used a fallback.",
+      "Matches your library's vibe.",
+      "Curated while AI is warming up.",
     ]);
     await persistHistory(supabase, user.id, fallback);
     return json({
@@ -612,10 +615,11 @@ serve(async (req) => {
     .slice(0, Math.max(1, Math.min(6, Number(reqLimit) || 4))) as Recommendation[];
 
   if (recs.length === 0) {
-    warnings.push("No AI recommendations matched candidates - using heuristic picks.");
+    console.warn("[reading-copilot] AI returned IDs that didn't match any candidates. Using fallback selection.");
+    warnings.push("Using curated picks while we tune the AI.");
     const fallback = buildFallback(candidates, [
-      "Based on your library and prompt.",
-      "AI response did not include matching candidates.",
+      "Matches your library's vibe.",
+      "Hand-picked from search results.",
     ]);
     await persistHistory(supabase, user.id, fallback);
     return json({

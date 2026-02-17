@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   BookOpen,
+  ChevronDown,
   MessageSquare,
   RefreshCcw,
   Sparkles,
@@ -66,6 +67,8 @@ type FeedbackEntry = {
   genre: string | null;
   tags: string[];
   decision: "accepted" | "rejected";
+  reason: string | null;
+  note: string | null;
   created_at: string;
 };
 
@@ -469,7 +472,12 @@ const Copilot = () => {
         setLoadingRecommendations(false);
         return;
       }
-      if (Array.isArray(data.warnings) && data.warnings.length > 0) setStatusMessage(data.warnings[0]);
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        // Never show internal warnings to user; show graceful fallback note
+        const w = data.warnings[0] || "";
+        const isInternal = /no ai|heuristic|matched candidates|anthropic|key missing/i.test(w);
+        setStatusMessage(isInternal ? "Using curated picks while we tune the AI." : w);
+      }
       setRecommendations((data.recommendations || []) as Recommendation[]);
       await loadHistory(userId);
       setLoadingRecommendations(false);
@@ -481,9 +489,21 @@ const Copilot = () => {
     setLoadingRecommendations(false);
   };
 
-  const handleDecision = async (book: Recommendation, decision: "accepted" | "rejected") => {
+  const [rejectingBookId, setRejectingBookId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectNote, setRejectNote] = useState("");
+
+  const REJECT_REASONS = [
+    "Not my genre",
+    "Too long / too heavy",
+    "Already read / not interested",
+    "Doesn't match my prompt",
+  ];
+
+  const handleDecision = async (book: Recommendation, decision: "accepted" | "rejected", reason?: string, note?: string) => {
     const entry: FeedbackEntry = {
-      book_id: book.id, title: book.title, author: book.author, genre: book.genre, tags: book.tags, decision, created_at: new Date().toISOString(),
+      book_id: book.id, title: book.title, author: book.author, genre: book.genre, tags: book.tags, decision,
+      reason: reason || null, note: note || null, created_at: new Date().toISOString(),
     };
     if (userId) {
       if (!entry.title || !entry.decision) { setCloudNotice("Feedback missing required fields; not queued."); return; }
@@ -498,12 +518,14 @@ const Copilot = () => {
       }
       const next = [entry, ...feedbackEntries].slice(0, 50);
       setFeedbackEntries(next);
-      toast.success(decision === "accepted" ? "Recommendation accepted." : "Recommendation rejected.");
+      toast.success(decision === "accepted" ? "Thanks! We'll find more like this." : "Got it — we'll steer away from picks like this.");
+      setRejectingBookId(null); setRejectReason(""); setRejectNote("");
       return;
     }
     const next = [entry, ...feedbackEntries].slice(0, 50);
     setFeedbackEntries(next); saveLocalFeedback(next);
-    toast.success(decision === "accepted" ? "Recommendation accepted." : "Recommendation rejected.");
+    toast.success(decision === "accepted" ? "Thanks! We'll find more like this." : "Got it — we'll steer away from picks like this.");
+    setRejectingBookId(null); setRejectReason(""); setRejectNote("");
   };
 
   const handleAddToLibrary = async (book: Recommendation) => {
@@ -691,18 +713,36 @@ const Copilot = () => {
                 </div>
                 <h3 className="font-display text-2xl font-bold mt-3">{book.title}</h3>
                 <p className="text-sm text-muted-foreground font-body mt-1">{book.author}</p>
-                <p className="text-sm text-muted-foreground font-body mt-3">{book.summary}</p>
-                <div className="mt-4">
-                  <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body mb-2">Why it fits</div>
-                  <ul className="space-y-1 text-sm text-muted-foreground font-body">{book.reasons.map((r) => <li key={`${book.id}-${r}`}>{r}</li>)}</ul>
-                </div>
-                {book.why_new && <div className="mt-4 rounded-lg border border-border/60 bg-background/70 p-3 text-sm text-muted-foreground"><span className="font-semibold text-foreground">Why this is new for you:</span> {book.why_new}</div>}
-                <div className="mt-2 text-xs text-muted-foreground">Source: {book.source}</div>
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <Button size="sm" onClick={() => handleDecision(book, "accepted")}><ThumbsUp className="w-4 h-4 mr-2" />Accept</Button>
-                  <Button size="sm" variant="outline" onClick={() => handleDecision(book, "rejected")}><ThumbsDown className="w-4 h-4 mr-2" />Reject</Button>
+                {book.reasons.length > 0 && (
+                  <ul className="mt-3 space-y-1 text-sm text-muted-foreground font-body">
+                    {book.reasons.slice(0, 2).map((r) => <li key={`${book.id}-${r}`}>• {r}</li>)}
+                  </ul>
+                )}
+                {book.why_new && <p className="mt-2 text-sm italic text-muted-foreground/80 font-body">{book.why_new}</p>}
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <Button size="sm" onClick={() => handleDecision(book, "accepted")}><ThumbsUp className="w-4 h-4 mr-2" />Good pick</Button>
+                  <Button size="sm" variant="outline" onClick={() => setRejectingBookId(rejectingBookId === book.id ? null : book.id)}>
+                    <ThumbsDown className="w-4 h-4 mr-2" />Not for me <ChevronDown className="w-3 h-3 ml-1" />
+                  </Button>
                   <Button size="sm" variant="ghost" onClick={() => handleAddToLibrary(book)}>Add to library</Button>
                 </div>
+                {rejectingBookId === book.id && (
+                  <div className="mt-3 rounded-lg border border-border/60 bg-background/80 p-3 grid gap-2">
+                    <p className="text-xs text-muted-foreground font-body">Why didn't this fit?</p>
+                    <div className="flex flex-wrap gap-2">
+                      {REJECT_REASONS.map((r) => (
+                        <Button key={r} size="sm" variant={rejectReason === r ? "default" : "outline"} className="text-xs h-7"
+                          onClick={() => setRejectReason(rejectReason === r ? "" : r)}>
+                          {r}
+                        </Button>
+                      ))}
+                    </div>
+                    <Textarea value={rejectNote} onChange={(e) => setRejectNote(e.target.value)} placeholder="Any other thoughts? (optional)" className="min-h-[50px] text-sm" />
+                    <div className="flex justify-end">
+                      <Button size="sm" onClick={() => handleDecision(book, "rejected", rejectReason, rejectNote)}>Submit feedback</Button>
+                    </div>
+                  </div>
+                )}
               </CardContent></Card>
             ))
           )}
