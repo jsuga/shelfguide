@@ -105,6 +105,7 @@ const Library = () => {
   const [savingStatuses, setSavingStatuses] = useState<Record<string, boolean>>({});
   const coverCacheInFlightRef = useRef<Set<string>>(new Set());
   const coverCacheProcessingRef = useRef(false);
+  const coverCacheAuthNoticeRef = useRef(false);
 
   const getLocalBooks = () => {
     const stored = localStorage.getItem("reading-copilot-library");
@@ -271,6 +272,14 @@ const Library = () => {
       if (coverCacheProcessingRef.current) return;
       coverCacheProcessingRef.current = true;
       try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (!sessionData.session) {
+          if (!coverCacheAuthNoticeRef.current) {
+            coverCacheAuthNoticeRef.current = true;
+            toast.message("Sign in to cache book covers.");
+          }
+          return;
+        }
         const batchSize = 5;
         for (let i = 0; i < pending.length; i += batchSize) {
           const batch = pending.slice(i, i + batchSize);

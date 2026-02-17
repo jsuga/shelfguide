@@ -10,6 +10,7 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type, x-requested-with, x-admin-key",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
 const json = (body: unknown, status = 200) =>
@@ -28,7 +29,7 @@ const extensionFromContentType = (contentType: string | null) => {
 };
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -38,19 +39,26 @@ serve(async (req) => {
     return json({ error: "Supabase environment not configured." }, 500);
   }
 
-  const authHeader = req.headers.get("Authorization") ?? "";
   const adminKey = Deno.env.get("COVER_CACHE_ADMIN_KEY");
   const providedAdminKey = req.headers.get("x-admin-key") ?? "";
+  const adminMode = !!adminKey && providedAdminKey === adminKey;
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  let user: { id: string } | null = null;
 
-  const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
+  if (!adminMode) {
+    if (!token) {
+      return json({ error: "Missing bearer token." }, 401);
+    }
+    const userClient = createClient(supabaseUrl, supabaseAnonKey);
+    const { data: authData, error: authError } = await userClient.auth.getUser(token);
+    user = authData?.user ?? null;
+    if (authError || !user) {
+      return json({ error: "Invalid or expired token." }, 401);
+    }
+  }
+
   const serviceClient = createClient(supabaseUrl, serviceRoleKey);
-
-  const { data: authData } = await userClient.auth.getUser();
-  const user = authData?.user ?? null;
-  const adminMode = !user && adminKey && providedAdminKey === adminKey;
-  if (!user && !adminMode) return json({ error: "Unauthorized" }, 401);
 
   const body = (await req.json().catch(() => ({}))) as CacheRequest;
   const bookId = body.book_id?.trim();
