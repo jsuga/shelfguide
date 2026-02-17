@@ -480,7 +480,7 @@ serve(async (req) => {
         ? "Prefer recommendations aligned with top genres."
         : "Balance familiar and fresh picks.",
     preferences,
-    atmosphere: preferences.atmosphere || "cozy",
+    atmosphere: preferences.atmosphere || (preferences as any).ui_theme || "cozy",
     profile,
     accepted,
     rejected,

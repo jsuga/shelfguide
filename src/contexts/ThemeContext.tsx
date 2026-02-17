@@ -5,7 +5,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { ensureProfileForUser } from "@/lib/profiles";
 
 const STORAGE_KEY = "shelfguide-theme";
+const ATMOSPHERE_KEY = "shelfguide-atmosphere";
 const LEGACY_STORAGE_KEY = "reading-copilot-theme";
+const THEME_SET = new Set(["default", "fantasy", "scifi", "history", "romance", "thriller"]);
 
 interface ThemeContextType {
   theme: GenreTheme;
@@ -27,6 +29,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, theme);
+    localStorage.setItem(ATMOSPHERE_KEY, theme);
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
@@ -34,11 +37,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const loadTheme = async (id: string) => {
       const { data } = await (supabase as any)
         .from("copilot_preferences")
-        .select("ui_theme")
+        .select("ui_theme,atmosphere")
         .eq("user_id", id)
         .maybeSingle();
-      if (data && data.ui_theme) {
-        setTheme(data.ui_theme as GenreTheme);
+      const candidate = data?.ui_theme || data?.atmosphere || null;
+      if (candidate && THEME_SET.has(candidate)) {
+        setTheme(candidate as GenreTheme);
       }
     };
 
@@ -85,6 +89,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           {
             user_id: userId,
             ui_theme: theme,
+            atmosphere: theme,
             updated_at: new Date().toISOString(),
           },
           { onConflict: "user_id" }
