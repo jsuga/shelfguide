@@ -2,3 +2,9 @@ project_id = "lmsekkqtjmukmbqrspbv"
 
 [functions.cache-book-cover]
 verify_jwt = false
+
+[functions.reading-copilot]
+verify_jwt = false
+
+[functions.goodreads-enrich]
+verify_jwt = false

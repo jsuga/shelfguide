@@ -14,7 +14,309 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      books: {
+        Row: {
+          author: string
+          cover_cache_error: string | null
+          cover_cache_status: string | null
+          cover_cached_at: string | null
+          cover_failed_at: string | null
+          cover_source: string | null
+          cover_storage_path: string | null
+          cover_url: string | null
+          created_at: string
+          date_read: string | null
+          dedupe_key: string | null
+          default_library_id: number | null
+          description: string | null
+          genre: string | null
+          goodreads_book_id: string | null
+          id: string
+          is_first_in_series: boolean | null
+          isbn: string | null
+          isbn13: string | null
+          page_count: number | null
+          published_year: number | null
+          rating: number | null
+          series_name: string | null
+          shelf: string | null
+          source: string | null
+          status: string | null
+          thumbnail: string | null
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          author: string
+          cover_cache_error?: string | null
+          cover_cache_status?: string | null
+          cover_cached_at?: string | null
+          cover_failed_at?: string | null
+          cover_source?: string | null
+          cover_storage_path?: string | null
+          cover_url?: string | null
+          created_at?: string
+          date_read?: string | null
+          dedupe_key?: string | null
+          default_library_id?: number | null
+          description?: string | null
+          genre?: string | null
+          goodreads_book_id?: string | null
+          id?: string
+          is_first_in_series?: boolean | null
+          isbn?: string | null
+          isbn13?: string | null
+          page_count?: number | null
+          published_year?: number | null
+          rating?: number | null
+          series_name?: string | null
+          shelf?: string | null
+          source?: string | null
+          status?: string | null
+          thumbnail?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          author?: string
+          cover_cache_error?: string | null
+          cover_cache_status?: string | null
+          cover_cached_at?: string | null
+          cover_failed_at?: string | null
+          cover_source?: string | null
+          cover_storage_path?: string | null
+          cover_url?: string | null
+          created_at?: string
+          date_read?: string | null
+          dedupe_key?: string | null
+          default_library_id?: number | null
+          description?: string | null
+          genre?: string | null
+          goodreads_book_id?: string | null
+          id?: string
+          is_first_in_series?: boolean | null
+          isbn?: string | null
+          isbn13?: string | null
+          page_count?: number | null
+          published_year?: number | null
+          rating?: number | null
+          series_name?: string | null
+          shelf?: string | null
+          source?: string | null
+          status?: string | null
+          thumbnail?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      copilot_feedback: {
+        Row: {
+          author: string | null
+          book_id: string | null
+          created_at: string | null
+          decision: string
+          genre: string | null
+          id: string
+          tags: string[] | null
+          title: string
+          user_id: string
+        }
+        Insert: {
+          author?: string | null
+          book_id?: string | null
+          created_at?: string | null
+          decision: string
+          genre?: string | null
+          id?: string
+          tags?: string[] | null
+          title: string
+          user_id: string
+        }
+        Update: {
+          author?: string | null
+          book_id?: string | null
+          created_at?: string | null
+          decision?: string
+          genre?: string | null
+          id?: string
+          tags?: string[] | null
+          title?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      copilot_preferences: {
+        Row: {
+          avoided_genres: string[] | null
+          created_at: string | null
+          id: string
+          notes: string | null
+          preferred_formats: string[] | null
+          preferred_genres: string[] | null
+          preferred_pace: string | null
+          ui_theme: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          avoided_genres?: string[] | null
+          created_at?: string | null
+          id?: string
+          notes?: string | null
+          preferred_formats?: string[] | null
+          preferred_genres?: string[] | null
+          preferred_pace?: string | null
+          ui_theme?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          avoided_genres?: string[] | null
+          created_at?: string | null
+          id?: string
+          notes?: string | null
+          preferred_formats?: string[] | null
+          preferred_genres?: string[] | null
+          preferred_pace?: string | null
+          ui_theme?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      copilot_rate_limits: {
+        Row: {
+          count: number | null
+          ip: string | null
+          key: string
+          updated_at: string | null
+          user_id: string | null
+          window_start: string | null
+        }
+        Insert: {
+          count?: number | null
+          ip?: string | null
+          key: string
+          updated_at?: string | null
+          user_id?: string | null
+          window_start?: string | null
+        }
+        Update: {
+          count?: number | null
+          ip?: string | null
+          key?: string
+          updated_at?: string | null
+          user_id?: string | null
+          window_start?: string | null
+        }
+        Relationships: []
+      }
+      copilot_recommendations: {
+        Row: {
+          author: string | null
+          book_id: string | null
+          created_at: string | null
+          genre: string | null
+          id: string
+          reasons: string[] | null
+          source: string | null
+          summary: string | null
+          tags: string[] | null
+          title: string
+          user_id: string
+          why_new: string | null
+        }
+        Insert: {
+          author?: string | null
+          book_id?: string | null
+          created_at?: string | null
+          genre?: string | null
+          id?: string
+          reasons?: string[] | null
+          source?: string | null
+          summary?: string | null
+          tags?: string[] | null
+          title: string
+          user_id: string
+          why_new?: string | null
+        }
+        Update: {
+          author?: string | null
+          book_id?: string | null
+          created_at?: string | null
+          genre?: string | null
+          id?: string
+          reasons?: string[] | null
+          source?: string | null
+          summary?: string | null
+          tags?: string[] | null
+          title?: string
+          user_id?: string
+          why_new?: string | null
+        }
+        Relationships: []
+      }
+      import_logs: {
+        Row: {
+          created_at: string | null
+          error_message: string | null
+          file_name: string | null
+          id: string
+          row_count: number | null
+          status: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          error_message?: string | null
+          file_name?: string | null
+          id?: string
+          row_count?: number | null
+          status?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          error_message?: string | null
+          file_name?: string | null
+          id?: string
+          row_count?: number | null
+          status?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          created_at: string | null
+          display_name: string | null
+          is_public: boolean | null
+          updated_at: string | null
+          user_id: string
+          username: string
+        }
+        Insert: {
+          created_at?: string | null
+          display_name?: string | null
+          is_public?: boolean | null
+          updated_at?: string | null
+          user_id: string
+          username: string
+        }
+        Update: {
+          created_at?: string | null
+          display_name?: string | null
+          is_public?: boolean | null
+          updated_at?: string | null
+          user_id?: string
+          username?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
