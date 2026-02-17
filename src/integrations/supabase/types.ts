@@ -121,6 +121,8 @@ export type Database = {
           decision: string
           genre: string | null
           id: string
+          note: string | null
+          reason: string | null
           tags: string[] | null
           title: string
           user_id: string
@@ -132,6 +134,8 @@ export type Database = {
           decision: string
           genre?: string | null
           id?: string
+          note?: string | null
+          reason?: string | null
           tags?: string[] | null
           title: string
           user_id: string
@@ -143,6 +147,8 @@ export type Database = {
           decision?: string
           genre?: string | null
           id?: string
+          note?: string | null
+          reason?: string | null
           tags?: string[] | null
           title?: string
           user_id?: string

@@ -436,18 +436,41 @@ const Library = () => {
     return applySort(filtered, sortMode);
   }, [books, searchQuery, sortMode]);
 
-  const codeSnippet = useMemo(() => {
-    const payload = {
-      title: title.trim(),
-      author: author.trim(),
+  const [addingBook, setAddingBook] = useState(false);
+  const [addBookDialogOpen, setAddBookDialogOpen] = useState(false);
+
+  const handleAddBook = async () => {
+    const t = title.trim();
+    const a = author.trim();
+    if (!t || !a) {
+      toast.error("Title and Author are required.");
+      return;
+    }
+    if (!userId) {
+      toast.error("Sign in to add books.");
+      return;
+    }
+    setAddingBook(true);
+    const newBook: any = {
+      title: t,
+      author: a,
       genre: genre.trim(),
       series_name: seriesName.trim() || null,
       is_first_in_series: isFirstInSeries,
       status,
+      user_id: userId,
     };
-
-    return `{\n  "title": "${payload.title}",\n  "author": "${payload.author}",\n  "genre": "${payload.genre}",\n  "series_name": ${payload.series_name ? `"${payload.series_name}"` : "null"},\n  "is_first_in_series": ${payload.is_first_in_series},\n  "status": "${payload.status}"\n}`;
-  }, [title, author, genre, seriesName, isFirstInSeries, status]);
+    const { error } = await db.from("books").insert([newBook]);
+    setAddingBook(false);
+    if (error) {
+      toast.error(`Could not add book: ${error.message}`);
+      return;
+    }
+    toast.success(`"${t}" added to your library!`);
+    setTitle(""); setAuthor(""); setGenre(""); setSeriesName(""); setIsFirstInSeries(false); setStatus("tbr");
+    setAddBookDialogOpen(false);
+    await loadBooks(userId);
+  };
 
   const persistBooks = (nextBooks: LibraryBook[]) => {
     setBooks(nextBooks);
@@ -781,7 +804,7 @@ const Library = () => {
               <span>Signed in as {userLabel}</span>
             </div>
           )}
-          <Dialog>
+          <Dialog open={addBookDialogOpen} onOpenChange={setAddBookDialogOpen}>
             <DialogTrigger asChild>
               <Button>Add Book</Button>
             </DialogTrigger>
@@ -790,21 +813,21 @@ const Library = () => {
                 <div className="px-8 py-6 bg-secondary/40 border-b border-border/60">
                   <DialogHeader>
                     <DialogTitle className="font-display text-2xl">
-                      Library Checkout Card
+                      Library Card
                     </DialogTitle>
                   </DialogHeader>
                   <p className="text-sm text-muted-foreground font-body mt-2">
-                    Fill in the card to generate a manual add code.
+                    Fill in the card to add another book to your library.
                   </p>
                 </div>
 
                 <div className="px-8 py-6 grid gap-5">
                   <div className="grid gap-2">
-                    <Label htmlFor="book-title">Title</Label>
+                    <Label htmlFor="book-title">Title <span className="text-destructive">*</span></Label>
                     <Input id="book-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="The Name of the Wind" />
                   </div>
                   <div className="grid gap-2">
-                    <Label htmlFor="book-author">Author</Label>
+                    <Label htmlFor="book-author">Author <span className="text-destructive">*</span></Label>
                     <Input id="book-author" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Patrick Rothfuss" />
                   </div>
                   <div className="grid gap-2">
@@ -831,10 +854,15 @@ const Library = () => {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="rounded-xl border border-dashed border-border/60 bg-background/80 p-4">
-                    <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground font-body mb-2">Manual Add Code</div>
-                    <pre className="text-xs whitespace-pre-wrap font-mono leading-relaxed text-foreground/90">{codeSnippet}</pre>
+                  <div className="flex items-center justify-end gap-3">
+                    <Button variant="outline" onClick={() => setAddBookDialogOpen(false)}>Cancel</Button>
+                    <Button onClick={handleAddBook} disabled={addingBook || !userId}>
+                      {addingBook ? "Adding..." : "Add Book"}
+                    </Button>
                   </div>
+                  {!userId && (
+                    <p className="text-xs text-muted-foreground text-center">Sign in to add books.</p>
+                  )}
                 </div>
               </div>
             </DialogContent>
