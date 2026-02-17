@@ -285,27 +285,25 @@ const Library = () => {
           const batch = pending.slice(i, i + batchSize);
           await Promise.all(
             batch.map(async (book) => {
-              const { data: sessionData } = await supabase.auth.getSession();
-if (!sessionData.session) return; // not logged in, don't call
+              const { data: sess } = await supabase.auth.getSession();
+              if (!sess.session) return;
 
-const { data, error } = await supabase.functions.invoke("cache-book-cover", {
-  body: { book_id },
-});
+              const { data, error } = await supabase.functions.invoke("cache-book-cover", {
+                body: { book_id: book.id },
+              });
 
-if (error) throw error;
-
-                  setLocalBooks(next);
-                  return next;
-                });
+              if (error) {
+                console.warn("[cover-cache] error for", book.id, error);
                 return;
               }
+
               setBooks((prev) => {
                 const next = prev.map((entry) =>
                   entry.id === book.id
                     ? {
                         ...entry,
-                        cover_storage_path: data.cover_storage_path,
-                        cover_cache_status: "cached",
+                        cover_storage_path: data?.cover_storage_path,
+                        cover_cache_status: "cached" as const,
                         cover_cache_error: null,
                       }
                     : entry
