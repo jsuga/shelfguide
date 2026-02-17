@@ -252,7 +252,7 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 GOOGLE_BOOKS_API_KEY=optional_google_books_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 COPILOT_RPS_WINDOW_MS=600000
-COPILOT_USER_LIMIT=20
+COPILOT_USER_LIMIT=200
 COPILOT_IP_LIMIT=8
 ```
 
@@ -327,6 +327,7 @@ Where to get them:
 ## CSV Import (Recommended: default template)
 
 The primary import path uses the custom CSV schema with `library_id` for stable, row-by-row imports.
+Cover fields are optional: rows without `cover_url` or `thumbnail` are still imported and will render a placeholder cover in the UI.
 
 ### Default CSV (recommended)
 
@@ -340,6 +341,10 @@ Required headers (case-insensitive, whitespace-tolerant):
 - `library_id`, `title`, `author`, `genre`, `series_name`, `is_first_in_series`, `status`
 
 Re-importing the same file updates rows by `library_id` without creating duplicates.
+
+Optional headers supported:
+
+- `cover_url`, `thumbnail`, `isbn`, `isbn13`, `published_year`, `goodreads_book_id`, `rating`
 
 ### Goodreads import (preview)
 
@@ -368,6 +373,10 @@ Cloud import writes are upsert-based and deduped by `books.dedupe_key`:
 - Else: `title_author_year:<normalized_title>|<normalized_author>|<published_year_or_unknown>`
 
 If cloud write fails, import data is queued locally and retried in the background; you can also trigger retry manually from **Preferences -> Sync Status**.
+
+## Community Library UI
+
+Public profiles use the same card/grid presentation as **My Library**, including cover placeholders when a cover is missing.
 
 ## Session 6.1 Stabilization (Sync + Dedupe + Auth)
 
