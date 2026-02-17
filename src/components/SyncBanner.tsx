@@ -137,10 +137,7 @@ const SyncBanner = () => {
         {showLearnMore && syncError && (
           <div className="mt-2 rounded-md border border-border/60 bg-background/60 p-2 text-[11px]">
             <span className="font-medium">{ERROR_CLASS_LABELS[syncError.errorClass] || "Error"}:</span>{" "}
-            <span>{syncError.userMessage || syncError.message}</span>
-            {syncError.actionHint && (
-              <span className="block text-muted-foreground/70 mt-1">{syncError.actionHint}</span>
-            )}
+            <span>{/pgrst|reload schema|schema cache|postgrest|supabase.*project|VITE_/i.test(syncError.userMessage || syncError.message) ? "Something went wrong. Please refresh and try again." : (syncError.userMessage || syncError.message)}</span>
             <span className="text-muted-foreground/60 ml-2">({new Date(syncError.timestamp).toLocaleString()})</span>
           </div>
         )}
