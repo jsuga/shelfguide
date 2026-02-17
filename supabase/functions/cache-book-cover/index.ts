@@ -33,30 +33,26 @@ serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") || req.headers.get("apikey") || "";
   const serviceRoleKey =
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("service_role_key");
-  if (!supabaseUrl || !supabaseAnonKey || !serviceRoleKey) {
-    return json({ error: "Missing SUPABASE_URL, SUPABASE_ANON_KEY, or service role key." }, 500);
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return json({ error: "Missing SUPABASE_URL or SUPABASE_ANON_KEY." }, 500);
+  }
+  if (!serviceRoleKey) {
+    return json({ error: "Missing service role key." }, 500);
   }
 
-  const adminKey = Deno.env.get("COVER_CACHE_ADMIN_KEY");
-  const providedAdminKey = req.headers.get("x-admin-key") ?? "";
-  const adminMode = !!adminKey && providedAdminKey === adminKey;
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
-  let user: { id: string } | null = null;
-
-  if (!adminMode) {
-    if (!token) {
-      return json({ error: "Missing bearer token." }, 401);
-    }
-    const userClient = createClient(supabaseUrl, supabaseAnonKey);
-    const { data: authData, error: authError } = await userClient.auth.getUser(token);
-    user = authData?.user ?? null;
-    if (authError || !user) {
-      return json({ error: "Invalid or expired token." }, 401);
-    }
+  if (!token) {
+    return json({ error: "Missing bearer token." }, 401);
+  }
+  const userClient = createClient(supabaseUrl, supabaseAnonKey);
+  const { data: authData, error: authError } = await userClient.auth.getUser(token);
+  const user = authData?.user ?? null;
+  if (authError || !user) {
+    return json({ error: "Invalid or expired token." }, 401);
   }
 
   const serviceClient = createClient(supabaseUrl, serviceRoleKey);
@@ -73,7 +69,7 @@ serve(async (req) => {
   if (bookError || !book) {
     return json({ error: "Book not found." }, 404);
   }
-  if (!adminMode && user && book.user_id !== user.id) {
+  if (book.user_id !== user.id) {
     return json({ error: "Forbidden." }, 403);
   }
 

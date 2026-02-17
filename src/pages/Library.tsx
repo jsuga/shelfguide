@@ -105,6 +105,7 @@ const Library = () => {
   const [failedCovers, setFailedCovers] = useState<Set<string>>(new Set());
   const [savingRatings, setSavingRatings] = useState<Record<string, boolean>>({});
   const [savingStatuses, setSavingStatuses] = useState<Record<string, boolean>>({});
+  const [coverRetryTokens, setCoverRetryTokens] = useState<Record<string, number>>({});
   const coverCacheInFlightRef = useRef<Set<string>>(new Set());
   const coverCacheProcessingRef = useRef(false);
   const coverCacheAuthNoticeRef = useRef(false);
@@ -462,6 +463,12 @@ const Library = () => {
     return data?.publicUrl || null;
   };
 
+  const withRetryParam = (url: string, token?: number) => {
+    if (!token) return url;
+    const joiner = url.includes("?") ? "&" : "?";
+    return `${url}${joiner}retry=${token}`;
+  };
+
   const updateBookStatus = async (book: LibraryBook, nextStatus: string) => {
     const key = getBookKey(book);
     const updated = { ...book, status: nextStatus };
@@ -769,6 +776,8 @@ const Library = () => {
             const coverFailed = failedCovers.has(coverKey);
             const storageCover = getStorageCoverUrl(book.cover_storage_path);
             const coverSrc = storageCover || book.cover_url || book.thumbnail;
+            const retryToken = book.id ? coverRetryTokens[book.id] : undefined;
+            const coverSrcWithRetry = coverSrc ? withRetryParam(coverSrc, retryToken) : null;
             return (
               <div
                 key={book.id || `${buildBookDedupeKey(book)}-${index}`}
@@ -777,9 +786,9 @@ const Library = () => {
                 <div className="flex gap-3">
                   {/* Cover image with robust fallback */}
                   <div className="flex-shrink-0 w-16 aspect-[2/3] rounded-md overflow-hidden bg-secondary/40 flex items-center justify-center relative">
-                    {coverSrc && !coverFailed ? (
+                    {coverSrcWithRetry && !coverFailed ? (
                       <img
-                        src={coverSrc}
+                        src={coverSrcWithRetry}
                         alt={book.title}
                         className="w-full h-full object-cover"
                         loading="lazy"
@@ -804,7 +813,72 @@ const Library = () => {
                       <div className="flex flex-col items-center justify-center gap-1">
                         <BookOpen className="w-5 h-5 text-muted-foreground/40" />
                         {coverFailed && (
-                          <span className="text-[9px] text-muted-foreground">cover unavailable</span>
+                          <>
+                            <span className="text-[9px] text-muted-foreground">cover unavailable</span>
+                            {book.id && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[10px]"
+                                disabled={coverCacheInFlightRef.current.has(book.id)}
+                                onClick={async () => {
+                                  if (!book.id) return;
+                                  if (coverCacheInFlightRef.current.has(book.id)) return;
+                                  const { data: sessionData } = await supabase.auth.getSession();
+                                  if (!sessionData.session) {
+                                    toast.message("Sign in to retry cover caching.");
+                                    return;
+                                  }
+                                  coverCacheInFlightRef.current.add(book.id);
+                                  try {
+                                    const result = await supabase.functions.invoke("cache-book-cover", {
+                                      body: { book_id: book.id },
+                                    });
+                                    const error = (result as any)?.error;
+                                    const data = (result as any)?.data || {};
+                                    if (error || !data?.cover_storage_path) {
+                                      const message =
+                                        error?.message ||
+                                        data?.error ||
+                                        "Cover cache failed.";
+                                      if (!coverCacheErrorLoggedRef.current.has(book.id)) {
+                                        coverCacheErrorLoggedRef.current.add(book.id);
+                                        console.warn(
+                                          "[ShelfGuide] Manual cover retry failed:",
+                                          { bookId: book.id, error: message, status: error?.status }
+                                        );
+                                      }
+                                      toast.error("Cover retry failed.");
+                                      return;
+                                    }
+                                    const { data: refreshed, error: refreshError } = await db
+                                      .from("books")
+                                      .select("*")
+                                      .eq("id", book.id)
+                                      .maybeSingle();
+                                    if (!refreshError && refreshed) {
+                                      setBooks((prev) => {
+                                        const next = prev.map((entry) =>
+                                          entry.id === book.id ? { ...entry, ...(refreshed as LibraryBook) } : entry
+                                        );
+                                        setLocalBooks(next);
+                                        return next;
+                                      });
+                                    }
+                                    setCoverRetryTokens((prev) => ({
+                                      ...prev,
+                                      [book.id as string]: Date.now(),
+                                    }));
+                                    toast.success("Cover cached.");
+                                  } finally {
+                                    coverCacheInFlightRef.current.delete(book.id);
+                                  }
+                                }}
+                              >
+                                Retry cover
+                              </Button>
+                            )}
+                          </>
                         )}
                       </div>
                     )}

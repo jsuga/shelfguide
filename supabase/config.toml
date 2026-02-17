@@ -1,1 +1,4 @@
 project_id = "lmsekkqtjmukmbqrspbv"
+
+[functions.cache-book-cover]
+verify_jwt = false
