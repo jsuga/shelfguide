@@ -85,7 +85,7 @@ const checkRateLimit = async (params: {
   ip: string | null;
   limit: number;
   windowMs: number;
-  client: ReturnType<typeof createClient>;
+  client: any;
 }) => {
   const now = new Date();
   const windowStart = new Date(now.getTime() - params.windowMs);
@@ -100,7 +100,7 @@ const checkRateLimit = async (params: {
   }
 
   if (!data) {
-    await params.client.from("copilot_rate_limits").insert({
+    await (params.client as any).from("copilot_rate_limits").insert({
       key: params.key,
       user_id: params.user_id,
       ip: params.ip,
@@ -111,16 +111,16 @@ const checkRateLimit = async (params: {
     return { allowed: true, retryAfter: 0 };
   }
 
-  const lastStart = new Date(data.window_start);
+  const lastStart = new Date((data as any).window_start);
   if (lastStart < windowStart) {
-    await params.client
+    await (params.client as any)
       .from("copilot_rate_limits")
       .update({ count: 1, window_start: now.toISOString(), updated_at: now.toISOString() })
       .eq("key", params.key);
     return { allowed: true, retryAfter: 0 };
   }
 
-  if (data.count >= params.limit) {
+  if ((data as any).count >= params.limit) {
     const retryAfter = Math.max(
       0,
       Math.ceil((lastStart.getTime() + params.windowMs - now.getTime()) / 1000)
@@ -128,9 +128,9 @@ const checkRateLimit = async (params: {
     return { allowed: false, retryAfter };
   }
 
-  await params.client
+  await (params.client as any)
     .from("copilot_rate_limits")
-    .update({ count: data.count + 1, updated_at: now.toISOString() })
+    .update({ count: (data as any).count + 1, updated_at: now.toISOString() })
     .eq("key", params.key);
   return { allowed: true, retryAfter: 0 };
 };
@@ -186,7 +186,7 @@ const fetchGoogleBooks = async (query: string, limit = 18) => {
   const payload = await res.json();
   const items = Array.isArray(payload.items) ? payload.items : [];
   return items
-    .map((item) => {
+    .map((item: any) => {
       const info = asRecord(asRecord(item).volumeInfo);
       const title = compact(getString(info.title));
       const authors = getStringArray(info.authors);
@@ -220,7 +220,7 @@ const fetchOpenLibrary = async (query: string, limit = 18) => {
   const payload = await res.json();
   const docs = Array.isArray(payload.docs) ? payload.docs : [];
   return docs
-    .map((doc) => {
+    .map((doc: any) => {
       const record = asRecord(doc);
       const title = compact(getString(record.title));
       const authorNames = getStringArray(record.author_name);
@@ -260,7 +260,7 @@ const buildFallback = (candidates: Candidate[], reasons: string[]): Recommendati
 };
 
 const persistHistory = async (
-  client: ReturnType<typeof createClient>,
+  client: any,
   userId: string,
   recommendations: Recommendation[]
 ) => {
@@ -277,7 +277,7 @@ const persistHistory = async (
     reasons: rec.reasons || [],
     why_new: rec.why_new,
   }));
-  await client.from("copilot_recommendations").insert(payload);
+  await (client as any).from("copilot_recommendations").insert(payload);
 };
 
 serve(async (req) => {
@@ -303,7 +303,7 @@ serve(async (req) => {
     prompt = "",
     tags = [],
     surprise = 35,
-    limit = 4,
+    limit: reqLimit = 4,
   } = await req.json().catch(() => ({}));
 
   const { data: authData } = await supabase.auth.getUser();
@@ -322,15 +322,15 @@ serve(async (req) => {
   const ipLimit = Number(Deno.env.get("COPILOT_IP_LIMIT")) || 8;
   const windowMs =
     Number(Deno.env.get("COPILOT_RPS_WINDOW_MS")) || 10 * 60 * 1000;
-  const limit = user ? userLimit : ipLimit;
+  const rlLimit = user ? userLimit : ipLimit;
   const key = user ? `user:${user.id}` : `ip:${ip}`;
   const rateResult = await checkRateLimit({
     key,
     user_id: user?.id ?? null,
     ip,
-    limit,
+    limit: rlLimit,
     windowMs,
-    client: rateLimitClient,
+    client: rateLimitClient as any,
   });
   if (!rateResult.allowed) {
     return json(
@@ -509,7 +509,7 @@ serve(async (req) => {
     ? anthropicPayload.content
     : [];
   const textBlock = content
-    .map((part) => (asRecord(part).text ? String(asRecord(part).text) : ""))
+    .map((part: any) => (asRecord(part).text ? String(asRecord(part).text) : ""))
     .join("\n");
   const parsed = extractJson(textBlock);
   if (!parsed || !Array.isArray(parsed.recommendations)) {
@@ -528,7 +528,7 @@ serve(async (req) => {
   }
 
   const recs = parsed.recommendations
-    .map((rec) => {
+    .map((rec: any) => {
       const recRecord = asRecord(rec);
       const match = candidates.find((candidate) => candidate.id === recRecord.id);
       if (!match) return null;
@@ -541,7 +541,7 @@ serve(async (req) => {
       } as Recommendation;
     })
     .filter(Boolean)
-    .slice(0, Math.max(1, Math.min(6, Number(limit) || 4))) as Recommendation[];
+    .slice(0, Math.max(1, Math.min(6, Number(reqLimit) || 4))) as Recommendation[];
 
   if (recs.length === 0) {
     warnings.push("No Claude recommendations found - using heuristic picks.");
