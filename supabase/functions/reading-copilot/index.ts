@@ -345,7 +345,7 @@ serve(async (req) => {
 
   const rateLimitClient = serviceClient || supabase;
 
-  const userLimit = Number(Deno.env.get("COPILOT_USER_LIMIT")) || 20;
+  const userLimit = Number(Deno.env.get("COPILOT_USER_LIMIT")) || 200;
   const windowMs =
     Number(Deno.env.get("COPILOT_RPS_WINDOW_MS")) || 10 * 60 * 1000;
   const rlKey = `user:${user.id}`;
