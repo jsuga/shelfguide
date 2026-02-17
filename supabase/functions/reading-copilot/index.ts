@@ -284,6 +284,28 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
+  // Parse body once, early
+  const body = await req.json().catch(() => ({} as any));
+  const debugMode = Boolean((body as any).debug);
+
+  // Debug should bypass auth
+  if (debugMode) {
+    const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+    return json({
+      ok: true,
+      function: "reading-copilot",
+      env_present: {
+        SUPABASE_URL: Boolean(Deno.env.get("SUPABASE_URL")),
+        SUPABASE_ANON_KEY: Boolean(Deno.env.get("SUPABASE_ANON_KEY")),
+        SUPABASE_SERVICE_ROLE_KEY: Boolean(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")),
+        ANTHROPIC_API_KEY: Boolean(anthropicKey),
+        GOOGLE_BOOKS_API_KEY: Boolean(Deno.env.get("GOOGLE_BOOKS_API_KEY")),
+      },
+      anthropic_key_len: anthropicKey.length,
+      anthropic_model: Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514",
+    });
+  }
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const supabaseKey = Deno.env.get("SUPABASE_ANON_KEY");
   if (!supabaseUrl || !supabaseKey) {
@@ -312,34 +334,12 @@ serve(async (req) => {
     ? createClient(supabaseUrl, serviceKey)
     : null;
 
-  const body = await req.json().catch(() => ({}));
   const {
     prompt = "",
     tags = [],
     surprise = 35,
     limit: reqLimit = 4,
-    debug = false,
-  } = body;
-
-  // Debug mode: return env diagnostics (safe - no secret values)
-  if (debug === true) {
-    const lovableKey = Deno.env.get("LOVABLE_API_KEY") || "";
-    const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") || "";
-    return json({
-      debug: true,
-      LOVABLE_API_KEY: lovableKey.length > 0,
-      lovable_key_len: lovableKey.length,
-      ANTHROPIC_API_KEY: anthropicKey.length > 0,
-      anthropic_key_len: anthropicKey.length,
-      SUPABASE_URL: !!supabaseUrl,
-      SUPABASE_ANON_KEY: !!supabaseKey,
-      SUPABASE_SERVICE_ROLE_KEY: !!serviceKey,
-      user_id: user.id,
-      env_keys: Object.keys(Deno.env.toObject()).filter(
-        (k) => !k.startsWith("_") && !k.includes("KEY") && !k.includes("SECRET")
-      ),
-    });
-  }
+  } = body as any;
 
   const ip = getClientIp(req);
 
@@ -431,6 +431,14 @@ serve(async (req) => {
   const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
   const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
   const warnings: string[] = [];
+
+  // Added debug because we were seeing "Anthropic key missing - using heuristic picks."
+  console.log(
+    "DEBUG env:",
+    "ANTHROPIC_API_KEY present =", Boolean(anthropicKey),
+    "len =", anthropicKey?.length ?? 0,
+    "model =", Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514"
+  );
 
   if (!lovableApiKey && !anthropicKey) {
     warnings.push("Using curated picks while we tune the AI.");
