@@ -1,0 +1,4 @@
+title,author,genre,series_name,is_first_in_series,status,isbn,isbn13,rating,cover_url,thumbnail
+"A Tale, With Commas","Smith, Jane",Fantasy,Series One,true,finished,1234567890,9781234567897,4.5,,
+"No Cover Book",John Doe,History,,false,tbr,,"",3,,
+"Has Cover","Cover Author",Mystery,,false,reading,1111111111,9781111111111,5,https://example.com/cover.jpg,

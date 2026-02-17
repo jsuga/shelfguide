@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
+import BookCard from "@/components/books/BookCard";
+import BookGrid from "@/components/books/BookGrid";
 import { supabase } from "@/integrations/supabase/client";
 import type { ProfileRow } from "@/lib/profiles";
 import { canAccessPublicLibrary } from "@/lib/profilePrivacy";
@@ -12,6 +14,9 @@ type PublicBook = {
   genre: string | null;
   status: string | null;
   series_name: string | null;
+  cover_url: string | null;
+  thumbnail: string | null;
+  cover_storage_path: string | null;
 };
 
 const PublicProfile = () => {
@@ -52,7 +57,7 @@ const PublicProfile = () => {
       setProfile(castProfile);
       const { data: profileBooks } = await (supabase as any)
         .from("books")
-        .select("id,title,author,genre,status,series_name")
+        .select("id,title,author,genre,status,series_name,cover_url,thumbnail,cover_storage_path")
         .eq("user_id", castProfile.user_id)
         .order("created_at", { ascending: false })
         .limit(200);
@@ -101,7 +106,7 @@ const PublicProfile = () => {
         </p>
       </div>
 
-      <div className="grid gap-3 max-w-4xl">
+      <div className="max-w-6xl">
         {books.length === 0 ? (
           <Card className="border-border/60 bg-card/70">
             <CardContent className="p-6 text-sm text-muted-foreground">
@@ -109,17 +114,31 @@ const PublicProfile = () => {
             </CardContent>
           </Card>
         ) : (
-          books.map((book) => (
-            <Card key={book.id} className="border-border/60 bg-card/70">
-              <CardContent className="p-4">
-                <div className="font-medium">{book.title}</div>
-                <div className="text-sm text-muted-foreground">{book.author}</div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  {book.genre || "General"} | {book.status || "unknown"}
-                </div>
-              </CardContent>
-            </Card>
-          ))
+          <BookGrid>
+            {books.map((book) => (
+              <BookCard
+                key={book.id}
+                book={book}
+                statusNode={
+                  <span className="rounded-full bg-secondary/70 px-2 py-0.5 text-[10px] text-muted-foreground">
+                    {book.status || "unknown"}
+                  </span>
+                }
+                badgesNode={
+                  <>
+                    <span className="rounded-full bg-secondary/70 px-2 py-0.5">
+                      {book.genre || "General"}
+                    </span>
+                    {book.series_name && (
+                      <span className="rounded-full bg-secondary/70 px-2 py-0.5">
+                        {book.series_name}
+                      </span>
+                    )}
+                  </>
+                }
+              />
+            ))}
+          </BookGrid>
         )}
       </div>
     </main>

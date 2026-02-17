@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookMarked, BookOpen, Search } from "lucide-react";
+import { BookMarked, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import StarRating from "@/components/StarRating";
 import StatusSelector from "@/components/StatusSelector";
+import BookCard from "@/components/books/BookCard";
+import BookGrid from "@/components/books/BookGrid";
 import { supabase } from "@/integrations/supabase/client";
 import {
   enqueueLibrarySync,
@@ -23,6 +25,7 @@ import {
 import { buildBookDedupeKey } from "@/lib/bookDedupe";
 import { applySort, type SortMode } from "@/lib/librarySort";
 import { enrichCovers, lookupCoverForBook, clearCoverCacheForBook } from "@/lib/coverEnrichment";
+import { parseLibraryCsv } from "@/lib/csvImport";
 
 type LibraryBook = {
   id?: string;
@@ -107,6 +110,7 @@ const Library = () => {
   const [savingStatuses, setSavingStatuses] = useState<Record<string, boolean>>({});
   const [coverRetryTokens, setCoverRetryTokens] = useState<Record<string, number>>({});
   const [coverRetrying, setCoverRetrying] = useState<Record<string, boolean>>({});
+  const [importSummary, setImportSummary] = useState<string | null>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const coverCacheInFlightRef = useRef<Set<string>>(new Set());
   const coverCacheAttemptedRef = useRef<Set<string>>(new Set());
@@ -502,118 +506,183 @@ const Library = () => {
 
   const handleCsvImport = async (file: File) => {
     const text = await file.text();
-    // Strip BOM
-    const clean = text.replace(/^\uFEFF/, "");
-    const lines = clean.split(/\r?\n/).filter((l) => l.trim());
-    if (lines.length < 2) {
-      toast.error("CSV file is empty or has no data rows.");
+    const { books: parsed, diagnostics } = parseLibraryCsv(text);
+
+    if (diagnostics.missingRequiredColumns) {
+      toast.error("CSV must include 'title' and 'author' columns.");
+      setImportSummary("Import failed: missing required title/author columns.");
       return;
     }
-    const rawHeaders = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/^"|"$/g, ""));
-    const colMap: Record<string, number> = {};
-    rawHeaders.forEach((h, i) => {
-      colMap[h] = i;
-    });
-    // Allow common aliases
-    const col = (name: string, ...aliases: string[]) => {
-      if (colMap[name] !== undefined) return colMap[name];
-      for (const a of aliases) if (colMap[a] !== undefined) return colMap[a];
-      return -1;
-    };
-    const titleCol = col("title");
-    const authorCol = col("author");
-    const genreCol = col("genre");
-    const seriesCol = col("series_name", "series");
-    const firstCol = col("is_first_in_series", "first_in_series");
-    const statusCol = col("status", "exclusive shelf", "bookshelves");
-    const isbnCol = col("isbn");
-    const isbn13Col = col("isbn13", "isbn_13");
-    const ratingCol = col("rating", "my rating");
-    if (titleCol === -1 || authorCol === -1) {
-      toast.error("CSV must have at least 'title' and 'author' columns.");
-      return;
-    }
-    const parseLine = (line: string) => {
-      const result: string[] = [];
-      let cur = "";
-      let inQuote = false;
-      for (const ch of line) {
-        if (ch === '"') { inQuote = !inQuote; continue; }
-        if (ch === "," && !inQuote) { result.push(cur.trim()); cur = ""; continue; }
-        cur += ch;
-      }
-      result.push(cur.trim());
-      return result;
-    };
-    const imported: LibraryBook[] = [];
-    let skipped = 0;
-    for (let i = 1; i < lines.length; i++) {
-      const vals = parseLine(lines[i]);
-      const t = vals[titleCol]?.trim();
-      const a = vals[authorCol]?.trim();
-      if (!t || !a) { skipped++; continue; }
-      const ratingRaw = ratingCol >= 0 ? vals[ratingCol]?.trim() : "";
-      const ratingNum = ratingRaw ? parseInt(ratingRaw, 10) : null;
-      imported.push({
-        title: t,
-        author: a,
-        genre: genreCol >= 0 ? vals[genreCol]?.trim() || "" : "",
-        series_name: seriesCol >= 0 ? vals[seriesCol]?.trim() || null : null,
-        is_first_in_series: firstCol >= 0 ? vals[firstCol]?.trim().toLowerCase() === "true" : false,
-        status: normalizeStatus(statusCol >= 0 ? vals[statusCol]?.trim() : "tbr"),
-        isbn: isbnCol >= 0 ? vals[isbnCol]?.trim().replace(/^="?|"$/g, "") || null : null,
-        isbn13: isbn13Col >= 0 ? vals[isbn13Col]?.trim().replace(/^="?|"$/g, "") || null : null,
-        rating: ratingNum && ratingNum >= 1 && ratingNum <= 5 ? ratingNum : null,
-      });
-    }
-    if (imported.length === 0) {
+
+    if (parsed.length === 0) {
+      const skipped = diagnostics.rejectedRows;
       toast.error(`No valid rows found. ${skipped} rows skipped.`);
+      setImportSummary(`Import failed: ${skipped} rows skipped.`);
       return;
     }
-    // Merge with existing library (dedupe by title+author)
-    const existing = new Set(books.map((b) => `${b.title.trim().toLowerCase()}|${b.author.trim().toLowerCase()}`));
-    const newBooks = imported.filter((b) => !existing.has(`${b.title.trim().toLowerCase()}|${b.author.trim().toLowerCase()}`));
-    const dupeCount = imported.length - newBooks.length;
-    if (newBooks.length === 0) {
-      toast.info(`All ${imported.length} books are already in your library.`);
-      return;
-    }
-    // Step A: Insert ALL books first, regardless of cover availability
+
+    const isNonEmptyValue = (value: unknown) => {
+      if (value == null) return false;
+      if (typeof value === "string") return value.trim().length > 0;
+      if (typeof value === "number") return Number.isFinite(value);
+      if (typeof value === "boolean") return true;
+      return true;
+    };
+
+    const mergeBooks = (current: LibraryBook, incoming: LibraryBook) => {
+      const merged: LibraryBook = { ...current };
+      const prefer = (key: keyof LibraryBook) => {
+        const existingValue = merged[key];
+        const incomingValue = incoming[key];
+        if (!isNonEmptyValue(existingValue) && isNonEmptyValue(incomingValue)) {
+          (merged as Record<string, unknown>)[key as string] = incomingValue as unknown;
+        }
+      };
+
+      prefer("title");
+      prefer("author");
+      prefer("genre");
+      prefer("series_name");
+      prefer("is_first_in_series");
+      prefer("status");
+      prefer("isbn");
+      prefer("isbn13");
+      prefer("goodreads_book_id");
+      prefer("default_library_id");
+      prefer("published_year");
+      prefer("rating");
+      prefer("page_count");
+      prefer("shelf");
+      prefer("description");
+      prefer("source");
+      prefer("cover_url");
+      prefer("thumbnail");
+      prefer("cover_source");
+      prefer("cover_failed_at");
+
+      return merged;
+    };
+
+    const normalizedImported = parsed.map((book) => ({
+      ...book,
+      status: normalizeStatus(book.status),
+      genre: book.genre || "",
+    })) as LibraryBook[];
+
+    const existingMap = new Map<string, LibraryBook>();
+    books.forEach((book) => {
+      existingMap.set(buildBookDedupeKey(book), book);
+    });
+
+    const importMap = new Map<string, LibraryBook>();
+    let duplicateCount = 0;
+    normalizedImported.forEach((book) => {
+      const key = buildBookDedupeKey(book);
+      const existing = importMap.get(key);
+      if (!existing) {
+        importMap.set(key, book);
+        return;
+      }
+      duplicateCount += 1;
+      importMap.set(key, mergeBooks(existing, book));
+    });
+
+    const dedupedImport = Array.from(importMap.values());
+    const mergedLocal = [...books];
+    const dedupeKeySet = new Set<string>();
+
+    dedupedImport.forEach((book) => {
+      const key = buildBookDedupeKey(book);
+      dedupeKeySet.add(key);
+      const existing = existingMap.get(key);
+      if (existing) {
+        const merged = mergeBooks(existing, book);
+        const idx = mergedLocal.findIndex((entry) => buildBookDedupeKey(entry) === key);
+        if (idx >= 0) mergedLocal[idx] = merged;
+        return;
+      }
+      mergedLocal.push(book);
+    });
+
+    const dedupeKeys = Array.from(dedupeKeySet.values());
+
+    const fetchExistingKeys = async (keys: string[]) => {
+      const existing = new Set<string>();
+      const chunkSize = 200;
+      for (let i = 0; i < keys.length; i += chunkSize) {
+        const chunk = keys.slice(i, i + chunkSize);
+        const { data, error } = await db
+          .from("books")
+          .select("dedupe_key")
+          .eq("user_id", userId)
+          .in("dedupe_key", chunk);
+        if (error) {
+          if (import.meta.env.DEV) {
+            console.warn("[ShelfGuide] CSV import lookup failed:", error);
+          }
+          break;
+        }
+        (data || []).forEach((row: { dedupe_key?: string | null }) => {
+          if (row?.dedupe_key) existing.add(row.dedupe_key);
+        });
+      }
+      return existing;
+    };
+
+    let insertCount = 0;
+    let updateCount = 0;
+
     if (userId) {
-      const rows = newBooks.map((b) => {
-        const { dedupe_key, created_at, updated_at, ...rest } = b as any;
-        return { ...rest, user_id: userId };
-      });
-      const { error } = await db.from("books").insert(rows);
+      const existingKeys = await fetchExistingKeys(dedupeKeys);
+      updateCount = existingKeys.size;
+      insertCount = Math.max(0, dedupeKeys.length - updateCount);
+
+      const { error } = await upsertBooksToCloud(userId, dedupedImport);
       if (error) {
-        console.error("[ShelfGuide] CSV import insert error:", error);
-        toast.error("Import failed. Books saved locally.");
-        const merged = [...books, ...newBooks];
-        persistBooks(merged);
+        console.error("[ShelfGuide] CSV import upsert error:", error);
+        const syncError = await recordSyncError({ error, operation: "upsert", table: "books", userId });
+        toast.error(syncError.userMessage || "Import failed. Books saved locally.");
+        persistBooks(mergedLocal);
       } else {
-        // Reload all books from cloud (this triggers Step B: cover enrichment via the useEffect)
         await loadBooks(userId);
       }
     } else {
-      const merged = [...books, ...newBooks];
-      persistBooks(merged);
+      persistBooks(mergedLocal);
     }
-    // Step B: Cover enrichment runs automatically via the useEffect after books state updates
-    // Show import summary with cover stats
-    const booksWithCovers = newBooks.filter((b) => b.cover_url || b.thumbnail).length;
-    const missingCovers = newBooks.length - booksWithCovers;
-    const parts = [`Imported ${newBooks.length} books.`];
+
+    const booksWithCovers = dedupedImport.filter((b) => b.cover_url || b.thumbnail).length;
+    const missingCovers = dedupedImport.length - booksWithCovers;
+
+    const parts = [
+      `Parsed ${diagnostics.totalRows} row(s).`,
+      `Accepted ${diagnostics.acceptedRows}.`,
+    ];
+    if (diagnostics.rejectedRows > 0) {
+      parts.push(`Rejected ${diagnostics.rejectedRows}.`);
+    }
+    parts.push(`Imported ${dedupedImport.length} unique book(s).`);
+    if (userId) {
+      parts.push(`Inserted ${insertCount}, updated ${updateCount}.`);
+    }
     if (booksWithCovers > 0) parts.push(`Covers found for ${booksWithCovers}.`);
     if (missingCovers > 0) parts.push(`Missing covers: ${missingCovers} (will fetch async).`);
-    if (dupeCount) parts.push(`${dupeCount} duplicates skipped.`);
-    if (skipped) parts.push(`${skipped} invalid rows skipped.`);
-    toast.success(parts.join(" "));
-  };
+    if (duplicateCount > 0) parts.push(`${duplicateCount} duplicates in file merged.`);
 
-  const getStorageCoverUrl = (path: string | null | undefined) => {
-    if (!path) return null;
-    const { data } = supabase.storage.from("book-covers").getPublicUrl(path);
-    return data?.publicUrl || null;
+    if (diagnostics.rejectedRows > 0) {
+      const reasonBuckets = Object.entries(diagnostics.rejectedByReason)
+        .map(([reason, count]) => `${reason}:${count}`)
+        .join(", ");
+      if (reasonBuckets) {
+        parts.push(`Reject reasons: ${reasonBuckets}.`);
+      }
+    }
+
+    const summary = parts.join(" ");
+    if (import.meta.env.DEV) {
+      console.log("[ShelfGuide] CSV import summary:", summary);
+    }
+    setImportSummary(summary);
+    toast.success("Import complete. See summary below.");
   };
 
   const withRetryParam = (url: string, token?: number) => {
@@ -902,6 +971,11 @@ const Library = () => {
           <span>{cloudNotice}</span>
         </div>
       )}
+      {importSummary && (
+        <div className="mb-4 rounded-lg border border-border/60 bg-secondary/40 px-4 py-2 text-xs text-muted-foreground">
+          <span>{importSummary}</span>
+        </div>
+      )}
 
       {/* Stats banner */}
       {books.length > 0 && (
@@ -954,161 +1028,133 @@ const Library = () => {
           </p>
         </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <BookGrid>
           {displayedBooks.map((book, index) => {
             const bookKey = getBookKey(book);
             const normalizedStatus = normalizeStatus(book.status);
             const coverKey = book.title + "|" + book.author;
             const coverFailed = failedCovers.has(coverKey);
-            const storageCover = getStorageCoverUrl(book.cover_storage_path);
-            const coverSrc = storageCover || book.cover_url || book.thumbnail;
+            const coverSrc = book.cover_url || book.thumbnail;
             const retryToken = book.id ? coverRetryTokens[book.id] : undefined;
             const coverSrcWithRetry = coverSrc ? withRetryParam(coverSrc, retryToken) : null;
-            const showCoverFallback = !coverSrcWithRetry || coverFailed;
+            const showRetry = !coverSrcWithRetry || coverFailed;
             return (
-              <div
+              <BookCard
                 key={book.id || `${buildBookDedupeKey(book)}-${index}`}
-                className="rounded-xl border border-border/60 bg-card/70 p-4 shadow-sm"
-              >
-                <div className="flex gap-3">
-                  {/* Cover image with robust fallback */}
-                  <div className="flex-shrink-0 w-16 aspect-[2/3] rounded-md overflow-hidden bg-secondary/40 flex items-center justify-center relative">
-                    {coverSrcWithRetry && !showCoverFallback ? (
-                      <img
-                        src={coverSrcWithRetry}
-                        alt={book.title}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                        onError={() => {
-                          let shouldPersistFailure = false;
-                          setFailedCovers((prev) => {
-                            if (prev.has(coverKey)) return prev;
-                            shouldPersistFailure = true;
-                            console.warn(`[ShelfGuide] Cover load failed for book id=${book.id || "unknown"} url=${coverSrc}`);
-                            return new Set(prev).add(coverKey);
+                book={book}
+                coverSrc={coverSrcWithRetry}
+                coverFailed={coverFailed}
+                onCoverError={() => {
+                  let shouldPersistFailure = false;
+                  setFailedCovers((prev) => {
+                    if (prev.has(coverKey)) return prev;
+                    shouldPersistFailure = true;
+                    console.warn(`[ShelfGuide] Cover load failed for book id=${book.id || "unknown"} url=${coverSrc}`);
+                    return new Set(prev).add(coverKey);
+                  });
+                  if (userId) {
+                    if (!shouldPersistFailure) return;
+                    void db
+                      .from("books")
+                      .update({ cover_failed_at: new Date().toISOString() })
+                      .eq("id", book.id || "");
+                  }
+                }}
+                onRetryCover={
+                  book.id && showRetry
+                    ? async () => {
+                        if (!book.id) return;
+                        if (coverRetrying[book.id]) return;
+                        setCoverRetrying((prev) => ({ ...prev, [book.id as string]: true }));
+                        clearCoverCacheForBook({
+                          title: book.title,
+                          author: book.author,
+                          isbn: book.isbn ?? null,
+                          isbn13: book.isbn13 ?? null,
+                        });
+                        try {
+                          const foundCover = await lookupCoverForBook({
+                            title: book.title,
+                            author: book.author,
+                            isbn: book.isbn ?? null,
+                            isbn13: book.isbn13 ?? null,
                           });
-                          if (userId) {
-                            if (!shouldPersistFailure) return;
-                            void db
-                              .from("books")
-                              .update({ cover_failed_at: new Date().toISOString() })
-                              .eq("id", book.id || "");
+                          if (!foundCover) {
+                            toast.error("Couldn't load cover. Try again.");
+                            return;
                           }
-                        }}
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center justify-center gap-1">
-                        <BookOpen className="w-5 h-5 text-muted-foreground/40" />
-                        {showCoverFallback && (
-                          <>
-                            <span className="text-[9px] text-muted-foreground">cover unavailable</span>
-                            {book.id && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-6 px-2 text-[10px]"
-                                disabled={coverRetrying[book.id] === true}
-                                onClick={async () => {
-                                  if (!book.id) return;
-                                  if (coverRetrying[book.id]) return;
-                                  setCoverRetrying((prev) => ({ ...prev, [book.id as string]: true }));
-                                  clearCoverCacheForBook({
-                                    title: book.title,
-                                    author: book.author,
-                                    isbn: book.isbn ?? null,
-                                    isbn13: book.isbn13 ?? null,
-                                  });
-                                  try {
-                                    const foundCover = await lookupCoverForBook({
-                                      title: book.title,
-                                      author: book.author,
-                                      isbn: book.isbn ?? null,
-                                      isbn13: book.isbn13 ?? null,
-                                    });
-                                    if (!foundCover) {
-                                      toast.error("Couldn't load cover. Try again.");
-                                      return;
-                                    }
 
-                                    setBookCover(book.id, foundCover);
+                          setBookCover(book.id, foundCover);
 
-                                    if (userId) {
-                                      const { error } = await db
-                                        .from("books")
-                                        .update({
-                                          cover_url: foundCover,
-                                          thumbnail: foundCover,
-                                          cover_source: "google_books",
-                                          cover_failed_at: null,
-                                          cover_cache_status: null,
-                                          cover_cache_error: null,
-                                        })
-                                        .eq("id", book.id);
-                                      if (error && import.meta.env.DEV) {
-                                        console.warn("[ShelfGuide] Cover update failed:", error);
-                                      }
-                                    }
+                          if (userId) {
+                            const { error } = await db
+                              .from("books")
+                              .update({
+                                cover_url: foundCover,
+                                thumbnail: foundCover,
+                                cover_source: "google_books",
+                                cover_failed_at: null,
+                                cover_cache_status: null,
+                                cover_cache_error: null,
+                              })
+                              .eq("id", book.id);
+                            if (error && import.meta.env.DEV) {
+                              console.warn("[ShelfGuide] Cover update failed:", error);
+                            }
+                          }
 
-                                    setCoverRetryTokens((prev) => ({
-                                      ...prev,
-                                      [book.id as string]: Date.now(),
-                                    }));
-                                    // Clear failure state so img re-renders
-                                    setFailedCovers((prev) => {
-                                      const next = new Set(prev);
-                                      next.delete(coverKey);
-                                      return next;
-                                    });
-                                    toast.success("Cover updated.");
-                                  } finally {
-                                    setCoverRetrying((prev) => ({ ...prev, [book.id as string]: false }));
-                                  }
-                                }}
-                              >
-                                {coverRetrying[book.id] ? "Retrying..." : "Retry cover"}
-                              </Button>
-                            )}
-                          </>
-                        )}
-                      </div>
+                          setCoverRetryTokens((prev) => ({
+                            ...prev,
+                            [book.id as string]: Date.now(),
+                          }));
+                          setFailedCovers((prev) => {
+                            const next = new Set(prev);
+                            next.delete(coverKey);
+                            return next;
+                          });
+                          toast.success("Cover updated.");
+                        } finally {
+                          setCoverRetrying((prev) => ({ ...prev, [book.id as string]: false }));
+                        }
+                      }
+                    : undefined
+                }
+                retrying={book.id ? coverRetrying[book.id] === true : false}
+                statusNode={
+                  <>
+                    <StatusSelector
+                      value={normalizedStatus}
+                      onChange={(next) => updateBookStatus(book, next)}
+                      disabled={!!savingStatuses[bookKey]}
+                    />
+                    {savingStatuses[bookKey] && (
+                      <span className="text-[10px] text-muted-foreground">Saving...</span>
                     )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <StatusSelector
-                          value={normalizedStatus}
-                          onChange={(next) => updateBookStatus(book, next)}
-                          disabled={!!savingStatuses[bookKey]}
-                        />
-                        {savingStatuses[bookKey] && (
-                          <span className="text-[10px] text-muted-foreground">Saving...</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Button variant="outline" size="sm" onClick={() => startEditing(index)}>Edit</Button>
-                        <Button variant="ghost" size="sm" onClick={() => deleteBook(index)}>Delete</Button>
-                      </div>
-                    </div>
-                    <h3 className="font-display text-lg font-bold mt-1 truncate">{book.title}</h3>
-                    <p className="text-sm text-muted-foreground font-body truncate">{book.author}</p>
-                    <div className="mt-2">
-                      <StarRating
-                        value={book.rating ?? null}
-                        onChange={(next) => updateBookRating(book, next)}
-                        saving={!!savingRatings[bookKey]}
-                      />
-                    </div>
-                    <div className="text-xs text-muted-foreground font-body mt-2 flex flex-wrap gap-1">
-                      {book.genre && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.genre}</span>}
-                      {book.series_name && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.series_name}</span>}
-                    </div>
-                  </div>
-                </div>
-              </div>
+                  </>
+                }
+                actionsNode={
+                  <>
+                    <Button variant="outline" size="sm" onClick={() => startEditing(index)}>Edit</Button>
+                    <Button variant="ghost" size="sm" onClick={() => deleteBook(index)}>Delete</Button>
+                  </>
+                }
+                ratingNode={
+                  <StarRating
+                    value={book.rating ?? null}
+                    onChange={(next) => updateBookRating(book, next)}
+                    saving={!!savingRatings[bookKey]}
+                  />
+                }
+                badgesNode={
+                  <>
+                    {book.genre && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.genre}</span>}
+                    {book.series_name && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.series_name}</span>}
+                  </>
+                }
+              />
             );
           })}
-        </div>
+        </BookGrid>
       )}
 
       <Dialog open={editingIndex !== null} onOpenChange={(open) => !open && setEditingIndex(null)}>
