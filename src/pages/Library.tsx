@@ -106,6 +106,7 @@ const Library = () => {
   const [savingRatings, setSavingRatings] = useState<Record<string, boolean>>({});
   const [savingStatuses, setSavingStatuses] = useState<Record<string, boolean>>({});
   const [coverRetryTokens, setCoverRetryTokens] = useState<Record<string, number>>({});
+  const csvInputRef = useRef<HTMLInputElement>(null);
   const coverCacheInFlightRef = useRef<Set<string>>(new Set());
   const coverCacheAttemptedRef = useRef<Set<string>>(new Set());
   const coverCacheProcessingRef = useRef(false);
@@ -149,7 +150,14 @@ const Library = () => {
       const reason = classifySyncError(error);
       const syncError = await recordSyncError({ error, operation: "select", table: "books", userId: userIdValue });
       if (import.meta.env.DEV) console.warn("[ShelfGuide] loadBooks failed:", { reason, error: error.message, timestamp: new Date().toISOString() });
-      setCloudNotice(syncError.userMessage || `Cloud sync is unavailable - ${reason.toLowerCase()}. Using local-only data for now.`);
+      // Never show raw internal/technical messages to users
+      const rawMsg = syncError.userMessage || "";
+      const isInternal = /pgrst|reload schema|schema cache|postgrest|supabase.*project|VITE_/i.test(rawMsg);
+      const friendlyMsg = isInternal
+        ? "Something went wrong. Please refresh and try again."
+        : rawMsg || `Cloud sync is unavailable. Using local-only data for now.`;
+      setCloudNotice(friendlyMsg);
+      if (isInternal && import.meta.env.DEV) console.warn("[ShelfGuide] Suppressed internal error from UI:", rawMsg);
       setBooks(getLocalBooks());
       return;
     }
@@ -468,6 +476,108 @@ const Library = () => {
     }
   };
 
+  const handleCsvImport = async (file: File) => {
+    const text = await file.text();
+    // Strip BOM
+    const clean = text.replace(/^\uFEFF/, "");
+    const lines = clean.split(/\r?\n/).filter((l) => l.trim());
+    if (lines.length < 2) {
+      toast.error("CSV file is empty or has no data rows.");
+      return;
+    }
+    const rawHeaders = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/^"|"$/g, ""));
+    const colMap: Record<string, number> = {};
+    rawHeaders.forEach((h, i) => {
+      colMap[h] = i;
+    });
+    // Allow common aliases
+    const col = (name: string, ...aliases: string[]) => {
+      if (colMap[name] !== undefined) return colMap[name];
+      for (const a of aliases) if (colMap[a] !== undefined) return colMap[a];
+      return -1;
+    };
+    const titleCol = col("title");
+    const authorCol = col("author");
+    const genreCol = col("genre");
+    const seriesCol = col("series_name", "series");
+    const firstCol = col("is_first_in_series", "first_in_series");
+    const statusCol = col("status", "exclusive shelf", "bookshelves");
+    const isbnCol = col("isbn");
+    const isbn13Col = col("isbn13", "isbn_13");
+    const ratingCol = col("rating", "my rating");
+    if (titleCol === -1 || authorCol === -1) {
+      toast.error("CSV must have at least 'title' and 'author' columns.");
+      return;
+    }
+    const parseLine = (line: string) => {
+      const result: string[] = [];
+      let cur = "";
+      let inQuote = false;
+      for (const ch of line) {
+        if (ch === '"') { inQuote = !inQuote; continue; }
+        if (ch === "," && !inQuote) { result.push(cur.trim()); cur = ""; continue; }
+        cur += ch;
+      }
+      result.push(cur.trim());
+      return result;
+    };
+    const imported: LibraryBook[] = [];
+    let skipped = 0;
+    for (let i = 1; i < lines.length; i++) {
+      const vals = parseLine(lines[i]);
+      const t = vals[titleCol]?.trim();
+      const a = vals[authorCol]?.trim();
+      if (!t || !a) { skipped++; continue; }
+      const ratingRaw = ratingCol >= 0 ? vals[ratingCol]?.trim() : "";
+      const ratingNum = ratingRaw ? parseInt(ratingRaw, 10) : null;
+      imported.push({
+        title: t,
+        author: a,
+        genre: genreCol >= 0 ? vals[genreCol]?.trim() || "" : "",
+        series_name: seriesCol >= 0 ? vals[seriesCol]?.trim() || null : null,
+        is_first_in_series: firstCol >= 0 ? vals[firstCol]?.trim().toLowerCase() === "true" : false,
+        status: normalizeStatus(statusCol >= 0 ? vals[statusCol]?.trim() : "tbr"),
+        isbn: isbnCol >= 0 ? vals[isbnCol]?.trim().replace(/^="?|"$/g, "") || null : null,
+        isbn13: isbn13Col >= 0 ? vals[isbn13Col]?.trim().replace(/^="?|"$/g, "") || null : null,
+        rating: ratingNum && ratingNum >= 1 && ratingNum <= 5 ? ratingNum : null,
+      });
+    }
+    if (imported.length === 0) {
+      toast.error(`No valid rows found. ${skipped} rows skipped.`);
+      return;
+    }
+    // Merge with existing library (dedupe by title+author)
+    const existing = new Set(books.map((b) => `${b.title.trim().toLowerCase()}|${b.author.trim().toLowerCase()}`));
+    const newBooks = imported.filter((b) => !existing.has(`${b.title.trim().toLowerCase()}|${b.author.trim().toLowerCase()}`));
+    const dupeCount = imported.length - newBooks.length;
+    if (newBooks.length === 0) {
+      toast.info(`All ${imported.length} books are already in your library.`);
+      return;
+    }
+    // Persist
+    if (userId) {
+      const rows = newBooks.map((b) => {
+        const { dedupe_key, created_at, updated_at, ...rest } = b as any;
+        return { ...rest, user_id: userId };
+      });
+      const { error } = await db.from("books").insert(rows);
+      if (error) {
+        console.error("[ShelfGuide] CSV import insert error:", error);
+        toast.error("Import failed. Books saved locally.");
+        const merged = [...books, ...newBooks];
+        persistBooks(merged);
+      } else {
+        await loadBooks(userId);
+        toast.success(`Imported ${newBooks.length} books.${dupeCount ? ` ${dupeCount} duplicates skipped.` : ""}${skipped ? ` ${skipped} invalid rows skipped.` : ""}`);
+        return;
+      }
+    } else {
+      const merged = [...books, ...newBooks];
+      persistBooks(merged);
+    }
+    toast.success(`Imported ${newBooks.length} books.${dupeCount ? ` ${dupeCount} duplicates skipped.` : ""}${skipped ? ` ${skipped} invalid rows skipped.` : ""}`);
+  };
+
   const getStorageCoverUrl = (path: string | null | undefined) => {
     if (!path) return null;
     const { data } = supabase.storage.from("book-covers").getPublicUrl(path);
@@ -708,11 +818,22 @@ const Library = () => {
               </div>
             </DialogContent>
           </Dialog>
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleCsvImport(file);
+              e.target.value = "";
+            }}
+          />
           <Button
             variant="outline"
             size="sm"
             className="text-xs px-3 h-8"
-            onClick={() => toast.message("Import Library is coming soon. Use Download CSV Template for now.")}
+            onClick={() => csvInputRef.current?.click()}
           >
             Import Library
           </Button>
@@ -881,6 +1002,12 @@ const Library = () => {
                                       ...prev,
                                       [book.id as string]: Date.now(),
                                     }));
+                                    // Clear failure state so img re-renders
+                                    setFailedCovers((prev) => {
+                                      const next = new Set(prev);
+                                      next.delete(coverKey);
+                                      return next;
+                                    });
                                     toast.success("Cover cached.");
                                   } finally {
                                     coverCacheInFlightRef.current.delete(book.id);
