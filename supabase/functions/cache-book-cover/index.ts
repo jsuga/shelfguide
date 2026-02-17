@@ -9,7 +9,7 @@ type CacheRequest = {
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-requested-with, x-admin-key",
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -29,14 +29,15 @@ const extensionFromContentType = (contentType: string | null) => {
 };
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
+  if (req.method === "OPTIONS") return new Response("ok", { status: 200, headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const serviceRoleKey =
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("service_role_key");
   if (!supabaseUrl || !supabaseAnonKey || !serviceRoleKey) {
-    return json({ error: "Supabase environment not configured." }, 500);
+    return json({ error: "Missing SUPABASE_URL, SUPABASE_ANON_KEY, or service role key." }, 500);
   }
 
   const adminKey = Deno.env.get("COVER_CACHE_ADMIN_KEY");

@@ -53,6 +53,8 @@ type LibraryBook = {
   source?: string | null;
 };
 
+const ENABLE_COVER_CACHE = true;
+
 const db = supabase as any;
 
 /** Canonical status normalizer - single source of truth */
@@ -106,6 +108,7 @@ const Library = () => {
   const coverCacheInFlightRef = useRef<Set<string>>(new Set());
   const coverCacheProcessingRef = useRef(false);
   const coverCacheAuthNoticeRef = useRef(false);
+  const coverCacheErrorLoggedRef = useRef<Set<string>>(new Set());
 
   const getLocalBooks = () => {
     const stored = localStorage.getItem("reading-copilot-library");
@@ -253,12 +256,17 @@ const Library = () => {
   }, [books, userId]);
 
   useEffect(() => {
+    if (!ENABLE_COVER_CACHE) return;
     if (!userId || books.length === 0) return;
     const candidates = books.filter(
       (book) =>
         !!book.id &&
         !book.cover_storage_path &&
-        (book.cover_url || book.thumbnail)
+        (book.cover_url || book.thumbnail) &&
+        !(
+          book.cover_cache_status === "failed" &&
+          /404|cors|failed to fetch/i.test(book.cover_cache_error || "")
+        )
     );
     if (candidates.length === 0) return;
 
@@ -290,6 +298,14 @@ const Library = () => {
               });
               const error = (result as any)?.error;
               const data = (result as any)?.data || {};
+              const errorMessage =
+                error?.message ||
+                data?.error ||
+                "Cover cache failed.";
+              const errorStatus = error?.status ?? null;
+              const shouldStopRetry =
+                errorStatus === 404 ||
+                /cors|failed to fetch/i.test(errorMessage);
               if (error || !data?.cover_storage_path) {
                 setBooks((prev) => {
                   const next = prev.map((entry) =>
@@ -297,13 +313,20 @@ const Library = () => {
                       ? {
                           ...entry,
                           cover_cache_status: "failed",
-                          cover_cache_error: error?.message || "Cover cache failed.",
+                          cover_cache_error: errorMessage,
                         }
                       : entry
                   );
                   setLocalBooks(next);
                   return next;
                 });
+                if (shouldStopRetry && book.id && !coverCacheErrorLoggedRef.current.has(book.id)) {
+                  coverCacheErrorLoggedRef.current.add(book.id);
+                  console.warn(
+                    "[ShelfGuide] Cover cache failed; will not retry:",
+                    { bookId: book.id, error: errorMessage, status: errorStatus }
+                  );
+                }
                 return;
               }
               setBooks((prev) => {
