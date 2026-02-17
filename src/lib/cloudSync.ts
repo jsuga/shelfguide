@@ -161,17 +161,8 @@ const buildUserMessage = (errorClass: SyncErrorClass, _projectRef: string | null
   }
 };
 
-const buildActionHint = (errorClass: SyncErrorClass) => {
-  // Technical hints are logged to console only – never shown in UI
-  if (errorClass === "schema_cache") {
-    return "Technical: schema cache refresh needed (NOTIFY pgrst, 'reload schema').";
-  }
-  if (errorClass === "missing_table" || errorClass === "project_mismatch") {
-    return "Technical: books table not found in connected project.";
-  }
-  if (errorClass === "permission") {
-    return "Technical: RLS policy blocked the operation.";
-  }
+const buildActionHint = (_errorClass: SyncErrorClass) => {
+  // Never show technical hints in the UI.
   return null;
 };
 
