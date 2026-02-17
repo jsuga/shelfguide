@@ -381,7 +381,7 @@ const Copilot = () => {
     if (!userIdValue) { setHistoryEntries([]); return; }
     setLoadingHistory(true);
     const result: any = await retryAsync(
-      () => db.from("copilot_recommendations").select("id,title,author,genre,source,reasons,summary,tags,why_new,created_at").eq("user_id", userIdValue).order("created_at", { ascending: false }).limit(8),
+      () => db.from("copilot_recommendations").select("id,title,author,genre,source,reasons,summary,tags,why_new,created_at").eq("user_id", userIdValue).order("created_at", { ascending: false }).limit(50),
       1, 350
     );
     const { data, error } = result;
@@ -555,17 +555,11 @@ const Copilot = () => {
     await handleAddToLibrary(rec);
   };
 
-  const resetFeedback = async () => {
-    if (userId) {
-      const { error } = await db.from("copilot_feedback").delete().eq("user_id", userId);
-      if (error) {
-        await recordSyncError({ error, operation: "delete", table: "copilot_feedback", userId });
-        toast.error("Could not clear feedback.");
-        return;
-      }
-    }
-    setFeedbackEntries([]); saveLocalFeedback([]);
-    toast.success("Feedback cleared.");
+  const resetFeedback = () => {
+    // UI-only reset: clear local state but keep data in Supabase for analytics
+    setFeedbackEntries([]);
+    saveLocalFeedback([]);
+    toast.success("Feedback reset. Your history is preserved for analytics.");
   };
 
   const stats = {
@@ -696,14 +690,7 @@ const Copilot = () => {
             </div>
           )}
           {recommendations.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-8 text-center">
-              <h3 className="font-display text-xl font-bold mb-2">Ready when you are</h3>
-              <p className="text-sm text-muted-foreground font-body mb-4">Generate picks to see personalized recommendations.</p>
-              <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                <Button onClick={fetchRecommendations} disabled={loadingRecommendations}>Generate picks</Button>
-                <Button asChild variant="outline"><Link to="/library">Add to my library</Link></Button>
-              </div>
-            </div>
+            <p className="text-sm text-muted-foreground font-body py-4">Generate picks to see personalized recommendations.</p>
           ) : (
             recommendations.map((book) => (
               <Card key={book.id} className="border-border/60 bg-card/80"><CardContent className="p-6">
@@ -762,22 +749,24 @@ const Copilot = () => {
                 )}
               </div>
             </div>
-            {!userId ? <p className="text-sm text-muted-foreground">Sign in to keep a recommendation history.</p> :
-             loadingHistory ? <p className="text-sm text-muted-foreground">Loading history...</p> :
-             historyEntries.length === 0 ? <p className="text-sm text-muted-foreground">No recommendations yet. Generate picks to populate your history.</p> :
-             <div className="grid gap-3">
-               {historyEntries.map((entry) => (
-                 <div key={entry.id} className="rounded-lg border border-border/50 bg-background/70 p-3 transition hover:border-primary/40 hover:bg-background" role="button" tabIndex={0}
-                   onClick={() => setSelectedHistory(entry)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedHistory(entry); }}>
-                   <div className="flex items-center justify-between text-xs text-muted-foreground"><span>{entry.genre || "General"}</span><span>{new Date(entry.created_at).toLocaleDateString()}</span></div>
-                   <div className="mt-1 font-semibold">{entry.title}</div>
-                   <div className="text-sm text-muted-foreground">{entry.author}</div>
-                   {entry.reasons?.length > 0 && <div className="mt-2 text-xs text-muted-foreground">{entry.reasons[0]}</div>}
-                   {entry.source && <div className="mt-1 text-[11px] text-muted-foreground/80">Source: {entry.source}</div>}
-                 </div>
-               ))}
-             </div>
-            }
+            <div className="max-h-[420px] md:max-h-[480px] overflow-y-auto">
+              {!userId ? <p className="text-sm text-muted-foreground">Sign in to keep a recommendation history.</p> :
+               loadingHistory ? <p className="text-sm text-muted-foreground">Loading history...</p> :
+               historyEntries.length === 0 ? <p className="text-sm text-muted-foreground">No recommendations yet. Generate picks to populate your history.</p> :
+               <div className="grid gap-3">
+                 {historyEntries.map((entry) => (
+                   <div key={entry.id} className="rounded-lg border border-border/50 bg-background/70 p-3 transition hover:border-primary/40 hover:bg-background" role="button" tabIndex={0}
+                     onClick={() => setSelectedHistory(entry)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedHistory(entry); }}>
+                     <div className="flex items-center justify-between text-xs text-muted-foreground"><span>{entry.genre || "General"}</span><span>{new Date(entry.created_at).toLocaleDateString()}</span></div>
+                     <div className="mt-1 font-semibold">{entry.title}</div>
+                     <div className="text-sm text-muted-foreground">{entry.author}</div>
+                     {entry.reasons?.length > 0 && <div className="mt-2 text-xs text-muted-foreground">{entry.reasons[0]}</div>}
+                     {entry.source && <div className="mt-1 text-[11px] text-muted-foreground/80">Source: {entry.source}</div>}
+                   </div>
+                 ))}
+               </div>
+              }
+            </div>
           </CardContent></Card>
         </section>
       </div>

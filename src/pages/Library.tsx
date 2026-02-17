@@ -578,7 +578,7 @@ const Library = () => {
       toast.info(`All ${imported.length} books are already in your library.`);
       return;
     }
-    // Persist
+    // Step A: Insert ALL books first, regardless of cover availability
     if (userId) {
       const rows = newBooks.map((b) => {
         const { dedupe_key, created_at, updated_at, ...rest } = b as any;
@@ -591,15 +591,23 @@ const Library = () => {
         const merged = [...books, ...newBooks];
         persistBooks(merged);
       } else {
+        // Reload all books from cloud (this triggers Step B: cover enrichment via the useEffect)
         await loadBooks(userId);
-        toast.success(`Imported ${newBooks.length} books.${dupeCount ? ` ${dupeCount} duplicates skipped.` : ""}${skipped ? ` ${skipped} invalid rows skipped.` : ""}`);
-        return;
       }
     } else {
       const merged = [...books, ...newBooks];
       persistBooks(merged);
     }
-    toast.success(`Imported ${newBooks.length} books.${dupeCount ? ` ${dupeCount} duplicates skipped.` : ""}${skipped ? ` ${skipped} invalid rows skipped.` : ""}`);
+    // Step B: Cover enrichment runs automatically via the useEffect after books state updates
+    // Show import summary with cover stats
+    const booksWithCovers = newBooks.filter((b) => b.cover_url || b.thumbnail).length;
+    const missingCovers = newBooks.length - booksWithCovers;
+    const parts = [`Imported ${newBooks.length} books.`];
+    if (booksWithCovers > 0) parts.push(`Covers found for ${booksWithCovers}.`);
+    if (missingCovers > 0) parts.push(`Missing covers: ${missingCovers} (will fetch async).`);
+    if (dupeCount) parts.push(`${dupeCount} duplicates skipped.`);
+    if (skipped) parts.push(`${skipped} invalid rows skipped.`);
+    toast.success(parts.join(" "));
   };
 
   const getStorageCoverUrl = (path: string | null | undefined) => {
