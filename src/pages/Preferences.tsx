@@ -177,7 +177,16 @@ const Preferences = () => {
     const userId = await getAuthenticatedUserId();
     if (!userId) { setSaving(false); toast.error("Sign in to save profile settings."); return; }
     const { error } = await db.from("profiles").upsert({ user_id: userId, username: normalized, display_name: displayName.trim() || null, is_public: isPublicProfile });
-    if (error) { setSaving(false); if (error.code === "23505") toast.error("That username is already taken."); else toast.error(error.message); return; }
+    if (error) {
+      setSaving(false);
+      if (error.code === "23505") {
+        toast.error("That username is already taken.");
+      } else {
+        if (import.meta.env.DEV) console.warn("[ShelfGuide] Profile save failed:", error);
+        toast.error("Profile service is temporarily unavailable. Please try again shortly.");
+      }
+      return;
+    }
     const { error: authError } = await supabase.auth.updateUser({ data: { username: normalized } });
     setSaving(false);
     if (authError) { toast.error(authError.message); return; }
@@ -209,13 +218,6 @@ const Preferences = () => {
           <Button variant="outline" onClick={handleRetrySync} disabled={syncingNow}>{syncingNow ? "Retrying..." : "Retry sync"}</Button>
         </section>
 
-        {userEmail && !username.trim() && (
-          <section className="rounded-xl border border-border/60 bg-card/70 p-6 lg:col-span-2">
-            <h2 className="font-display text-2xl font-bold mb-2">Choose a Username</h2>
-            <p className="text-sm text-muted-foreground font-body">Pick a username to complete your profile setup and enable a public link.</p>
-          </section>
-        )}
-
         {showDiagnostics && (
           <section className="rounded-xl border border-border/60 bg-card/70 p-6 lg:col-span-2">
             <h2 className="font-display text-2xl font-bold mb-2">Diagnostics</h2>
@@ -237,7 +239,13 @@ const Preferences = () => {
           {userEmail ? (
             <div className="grid gap-4">
               <div className="grid gap-2"><Label>Email</Label><Input value={userEmail} disabled /></div>
-              <div className="grid gap-2"><Label htmlFor="username">Username</Label><Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="chapterSeeker" /></div>
+              <div className="grid gap-2">
+                <Label htmlFor="username">Username</Label>
+                <p className="text-xs text-muted-foreground">
+                  Pick a username to complete your profile setup and enable a public link to connect with friends
+                </p>
+                <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="chapterSeeker" />
+              </div>
               <div className="grid gap-2"><Label htmlFor="display-name">Display name (optional)</Label><Input id="display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Chapter Seeker" /></div>
               <div className="flex items-center justify-between rounded-lg border border-border/60 bg-background/60 p-3">
                 <div><div className="text-sm font-medium">Profile Privacy</div><p className="text-xs text-muted-foreground">Public profile: allow others to find your profile and view your library.</p></div>

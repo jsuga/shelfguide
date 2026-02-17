@@ -147,7 +147,7 @@ export const getSupabaseProjectRef = () => {
 const buildUserMessage = (errorClass: SyncErrorClass, projectRef: string | null) => {
   switch (errorClass) {
     case "schema_cache":
-      return "Supabase schema cache needs refresh. Run NOTIFY pgrst, 'reload schema'; in the Supabase SQL Editor, then retry.";
+      return "Cloud sync is temporarily unavailable. Please try again shortly.";
     case "missing_table":
     case "project_mismatch":
       return `Connected to Supabase project ${projectRef || "(unknown)"} but books table missing. Check VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY in local + Lovable env.`;
@@ -164,7 +164,7 @@ const buildUserMessage = (errorClass: SyncErrorClass, projectRef: string | null)
 
 const buildActionHint = (errorClass: SyncErrorClass) => {
   if (errorClass === "schema_cache") {
-    return "Supabase SQL Editor: NOTIFY pgrst, 'reload schema'; if it persists, verify VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.";
+    return null;
   }
   if (errorClass === "missing_table" || errorClass === "project_mismatch") {
     return "Verify VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set for this environment.";

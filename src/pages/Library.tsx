@@ -107,6 +107,7 @@ const Library = () => {
   const [savingStatuses, setSavingStatuses] = useState<Record<string, boolean>>({});
   const [coverRetryTokens, setCoverRetryTokens] = useState<Record<string, number>>({});
   const coverCacheInFlightRef = useRef<Set<string>>(new Set());
+  const coverCacheAttemptedRef = useRef<Set<string>>(new Set());
   const coverCacheProcessingRef = useRef(false);
   const coverCacheAuthNoticeRef = useRef(false);
   const coverCacheErrorLoggedRef = useRef<Set<string>>(new Set());
@@ -264,6 +265,7 @@ const Library = () => {
         !!book.id &&
         !book.cover_storage_path &&
         (book.cover_url || book.thumbnail) &&
+        !coverCacheAttemptedRef.current.has(book.id || "") &&
         !(
           book.cover_cache_status === "failed" &&
           /404|cors|failed to fetch/i.test(book.cover_cache_error || "")
@@ -271,10 +273,13 @@ const Library = () => {
     );
     if (candidates.length === 0) return;
 
-    const pending = candidates.filter((book) => !coverCacheInFlightRef.current.has(book.id || ""));
+    const pending = candidates.filter((book) => !coverCacheAttemptedRef.current.has(book.id || ""));
     if (pending.length === 0) return;
     pending.forEach((book) => {
-      if (book.id) coverCacheInFlightRef.current.add(book.id);
+      if (book.id) {
+        coverCacheAttemptedRef.current.add(book.id);
+        coverCacheInFlightRef.current.add(book.id);
+      }
     });
 
     const run = async () => {
@@ -294,56 +299,62 @@ const Library = () => {
           const batch = pending.slice(i, i + batchSize);
           await Promise.all(
             batch.map(async (book) => {
-              const result = await supabase.functions.invoke("cache-book-cover", {
-                body: { book_id: book.id },
-              });
-              const error = (result as any)?.error;
-              const data = (result as any)?.data || {};
-              const errorMessage =
-                error?.message ||
-                data?.error ||
-                "Cover cache failed.";
-              const errorStatus = error?.status ?? null;
-              const shouldStopRetry =
-                errorStatus === 404 ||
-                /cors|failed to fetch/i.test(errorMessage);
-              if (error || !data?.cover_storage_path) {
+              try {
+                const result = await supabase.functions.invoke("cache-book-cover", {
+                  body: { book_id: book.id },
+                });
+                const error = (result as any)?.error;
+                const data = (result as any)?.data || {};
+                const errorMessage =
+                  error?.message ||
+                  data?.error ||
+                  "Cover cache failed.";
+                const errorStatus = error?.status ?? null;
+                const shouldStopRetry =
+                  errorStatus === 404 ||
+                  /cors|failed to fetch/i.test(errorMessage);
+                if (error || !data?.cover_storage_path) {
+                  setBooks((prev) => {
+                    const next = prev.map((entry) =>
+                      entry.id === book.id
+                        ? {
+                            ...entry,
+                            cover_cache_status: "failed",
+                            cover_cache_error: errorMessage,
+                          }
+                        : entry
+                    );
+                    setLocalBooks(next);
+                    return next;
+                  });
+                  if (shouldStopRetry && book.id && !coverCacheErrorLoggedRef.current.has(book.id)) {
+                    coverCacheErrorLoggedRef.current.add(book.id);
+                    console.warn(
+                      "[ShelfGuide] Cover cache failed; will not retry:",
+                      { bookId: book.id, error: errorMessage, status: errorStatus }
+                    );
+                  }
+                  return;
+                }
                 setBooks((prev) => {
                   const next = prev.map((entry) =>
                     entry.id === book.id
                       ? {
                           ...entry,
-                          cover_cache_status: "failed",
-                          cover_cache_error: errorMessage,
+                          cover_storage_path: data.cover_storage_path,
+                          cover_cache_status: "cached",
+                          cover_cache_error: null,
                         }
                       : entry
                   );
                   setLocalBooks(next);
                   return next;
                 });
-                if (shouldStopRetry && book.id && !coverCacheErrorLoggedRef.current.has(book.id)) {
-                  coverCacheErrorLoggedRef.current.add(book.id);
-                  console.warn(
-                    "[ShelfGuide] Cover cache failed; will not retry:",
-                    { bookId: book.id, error: errorMessage, status: errorStatus }
-                  );
+              } finally {
+                if (book.id) {
+                  coverCacheInFlightRef.current.delete(book.id);
                 }
-                return;
               }
-              setBooks((prev) => {
-                const next = prev.map((entry) =>
-                  entry.id === book.id
-                    ? {
-                        ...entry,
-                        cover_storage_path: data.cover_storage_path,
-                        cover_cache_status: "cached",
-                        cover_cache_error: null,
-                      }
-                    : entry
-                );
-                setLocalBooks(next);
-                return next;
-              });
             })
           );
           await new Promise((resolve) => setTimeout(resolve, 250));
@@ -778,6 +789,7 @@ const Library = () => {
             const coverSrc = storageCover || book.cover_url || book.thumbnail;
             const retryToken = book.id ? coverRetryTokens[book.id] : undefined;
             const coverSrcWithRetry = coverSrc ? withRetryParam(coverSrc, retryToken) : null;
+            const showCoverFallback = !coverSrcWithRetry || coverFailed;
             return (
               <div
                 key={book.id || `${buildBookDedupeKey(book)}-${index}`}
@@ -786,7 +798,7 @@ const Library = () => {
                 <div className="flex gap-3">
                   {/* Cover image with robust fallback */}
                   <div className="flex-shrink-0 w-16 aspect-[2/3] rounded-md overflow-hidden bg-secondary/40 flex items-center justify-center relative">
-                    {coverSrcWithRetry && !coverFailed ? (
+                    {coverSrcWithRetry && !showCoverFallback ? (
                       <img
                         src={coverSrcWithRetry}
                         alt={book.title}
@@ -812,7 +824,7 @@ const Library = () => {
                     ) : (
                       <div className="flex flex-col items-center justify-center gap-1">
                         <BookOpen className="w-5 h-5 text-muted-foreground/40" />
-                        {coverFailed && (
+                        {showCoverFallback && (
                           <>
                             <span className="text-[9px] text-muted-foreground">cover unavailable</span>
                             {book.id && (
