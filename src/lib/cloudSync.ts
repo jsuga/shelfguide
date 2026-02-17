@@ -144,17 +144,16 @@ export const getSupabaseProjectRef = () => {
   }
 };
 
-const buildUserMessage = (errorClass: SyncErrorClass, projectRef: string | null) => {
+const buildUserMessage = (errorClass: SyncErrorClass, _projectRef: string | null) => {
   switch (errorClass) {
     case "schema_cache":
-      return "Supabase schema cache needs refresh. Run NOTIFY pgrst, 'reload schema'; in the Supabase SQL Editor, then retry.";
     case "missing_table":
     case "project_mismatch":
-      return `Connected to Supabase project ${projectRef || "(unknown)"} but books table missing. Check VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY in local + Lovable env.`;
+      return "Something went wrong with cloud sync. Please refresh and try again.";
     case "auth":
       return "Session expired. Please sign in again.";
     case "permission":
-      return "RLS blocked this operation. Check policies for public.books.";
+      return "Permission error. Please sign out and back in, then retry.";
     case "network":
       return "Network error. Check your connection and retry.";
     default:
@@ -163,14 +162,15 @@ const buildUserMessage = (errorClass: SyncErrorClass, projectRef: string | null)
 };
 
 const buildActionHint = (errorClass: SyncErrorClass) => {
+  // Technical hints are logged to console only – never shown in UI
   if (errorClass === "schema_cache") {
-    return "Supabase SQL Editor: NOTIFY pgrst, 'reload schema'; if it persists, verify VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.";
+    return "Technical: schema cache refresh needed (NOTIFY pgrst, 'reload schema').";
   }
   if (errorClass === "missing_table" || errorClass === "project_mismatch") {
-    return "Verify VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set for this environment.";
+    return "Technical: books table not found in connected project.";
   }
   if (errorClass === "permission") {
-    return "Ensure RLS policies allow auth.uid() = user_id for select/insert/update/delete.";
+    return "Technical: RLS policy blocked the operation.";
   }
   return null;
 };

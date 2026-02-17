@@ -148,7 +148,14 @@ const Library = () => {
       const reason = classifySyncError(error);
       const syncError = await recordSyncError({ error, operation: "select", table: "books", userId: userIdValue });
       if (import.meta.env.DEV) console.warn("[ShelfGuide] loadBooks failed:", { reason, error: error.message, timestamp: new Date().toISOString() });
-      setCloudNotice(syncError.userMessage || `Cloud sync is unavailable - ${reason.toLowerCase()}. Using local-only data for now.`);
+      // Never show raw internal/technical messages to users
+      const rawMsg = syncError.userMessage || "";
+      const isInternal = /pgrst|reload schema|schema cache|postgrest|supabase.*project|VITE_/i.test(rawMsg);
+      const friendlyMsg = isInternal
+        ? "Something went wrong. Please refresh and try again."
+        : rawMsg || `Cloud sync is unavailable. Using local-only data for now.`;
+      setCloudNotice(friendlyMsg);
+      if (isInternal && import.meta.env.DEV) console.warn("[ShelfGuide] Suppressed internal error from UI:", rawMsg);
       setBooks(getLocalBooks());
       return;
     }
