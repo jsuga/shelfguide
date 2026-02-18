@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.goodreads-enrich]
 verify_jwt = false
+
+[functions.recommend-from-library]
+verify_jwt = false
