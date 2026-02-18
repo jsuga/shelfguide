@@ -449,8 +449,14 @@ const Copilot = () => {
         setLoadingRecommendations(false);
         return;
       }
-      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+      // For is_tbr_strict responses, never show mismatch banners
+      const isTbrStrict = data.is_tbr_strict === true;
+      if (!isTbrStrict && Array.isArray(data.warnings) && data.warnings.length > 0) {
         setStatusMessage(data.warnings[0]);
+      } else if (isTbrStrict && !data.llm_used && data.recommendations?.length > 0) {
+        setStatusMessage("Quick pick from your TBR — AI was unavailable.");
+      } else {
+        setStatusMessage(null);
       }
       const mapped = (data.recommendations || []).map((r: any) => ({
         id: r.id,

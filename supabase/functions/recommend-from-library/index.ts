@@ -9,6 +9,7 @@ type TbrCandidate = {
   author: string;
   genre: string | null;
   series_name: string | null;
+  google_volume_id: string | null;
   tags?: string[];
 };
 
@@ -18,6 +19,7 @@ type RecommendationOut = {
   author: string;
   genre: string;
   tags: string[];
+  google_volume_id: string | null;
   reasons: string[];
   source: string;
 };
@@ -127,7 +129,7 @@ serve(async (req) => {
   // ── Fetch user's TBR books (source of truth) ──
   const { data: tbrData, error: tbrError } = await (supabase as any)
     .from("books")
-    .select("id, title, author, genre, series_name")
+    .select("id, title, author, genre, series_name, google_volume_id")
     .eq("user_id", user.id)
     .eq("status", "tbr")
     .order("created_at", { ascending: false })
@@ -144,6 +146,7 @@ serve(async (req) => {
     author: row.author,
     genre: row.genre || null,
     series_name: row.series_name || null,
+    google_volume_id: row.google_volume_id || null,
   }));
 
   if (candidates.length === 0) {
@@ -152,6 +155,7 @@ serve(async (req) => {
       llm_used: false,
       provider: "none",
       model: null,
+      is_tbr_strict: true,
       warnings: ["You have no TBR books. Add books with status 'TBR' to get recommendations."],
     });
   }
@@ -175,11 +179,13 @@ serve(async (req) => {
     const recs = picks.map((c) => ({
       id: c.id, title: c.title, author: c.author,
       genre: c.genre || "General", tags: [],
+      google_volume_id: c.google_volume_id || null,
       reasons: ["Selected from your TBR list"],
       source: "deterministic_fallback",
     }));
     return json({
       recommendations: recs, llm_used: false, provider: "none", model: null,
+      is_tbr_strict: true,
       warnings: [],
       error: { code: "MISSING_ANTHROPIC_KEY", message: "No Anthropic API key configured." },
       ...(debugInfo ? { debug: debugInfo } : {}),
@@ -274,6 +280,7 @@ serve(async (req) => {
             author: match.author,
             genre: match.genre || "General",
             tags: [],
+            google_volume_id: match.google_volume_id || null,
             reasons: Array.isArray(reasonsMap[rid])
               ? reasonsMap[rid].map(String).slice(0, 3)
               : ["Recommended from your TBR"],
@@ -300,7 +307,8 @@ serve(async (req) => {
     validRecs = picks.map((c) => ({
       id: c.id, title: c.title, author: c.author,
       genre: c.genre || "General", tags: [],
-      reasons: ["Selected from your TBR list (AI unavailable)"],
+      google_volume_id: c.google_volume_id || null,
+      reasons: ["Quick pick from your TBR list"],
       source: "deterministic_fallback",
     }));
   }
@@ -329,6 +337,7 @@ serve(async (req) => {
     llm_used: llmSuccess,
     provider: llmSuccess ? "anthropic" : "deterministic_fallback",
     model: llmSuccess ? anthropicModel : null,
+    is_tbr_strict: true,
     warnings: [],
     ...(debugInfo ? { debug: debugInfo } : {}),
   });
