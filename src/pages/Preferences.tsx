@@ -182,12 +182,6 @@ const Preferences = () => {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
-        <section className="rounded-xl border border-border/60 bg-card/70 p-6 lg:col-span-2">
-          <h2 className="font-display text-2xl font-bold mb-2">Sync Status</h2>
-          <p className="text-sm text-muted-foreground font-body mb-4">Pending library sync: {pendingSync.library} | pending feedback sync: {pendingSync.feedback} | needs attention: {pendingSync.needsAttention}</p>
-          <Button variant="outline" onClick={handleRetrySync} disabled={syncingNow}>{syncingNow ? "Retrying..." : "Retry sync"}</Button>
-        </section>
-
         {showDiagnostics && (
           <section className="rounded-xl border border-border/60 bg-card/70 p-6 lg:col-span-2">
             <h2 className="font-display text-2xl font-bold mb-2">Diagnostics</h2>
@@ -218,8 +212,19 @@ const Preferences = () => {
               </div>
               <div className="grid gap-2"><Label htmlFor="display-name">Display name (optional)</Label><Input id="display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Chapter Seeker" /></div>
               <div className="flex items-center justify-between rounded-lg border border-border/60 bg-background/60 p-3">
-                <div><div className="text-sm font-medium">Profile Privacy</div><p className="text-xs text-muted-foreground">Public profile: allow others to find your profile and view your library.</p></div>
+                <div><div className="text-sm font-medium">Public Profile</div><p className="text-xs text-muted-foreground">Allow others to find your profile and view your library.</p></div>
                 <Switch checked={isPublicProfile} onCheckedChange={setIsPublicProfile} />
+              </div>
+              <div className="rounded-lg border border-border/60 bg-background/40 p-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sync Status</div>
+                <div className="mt-1 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-muted-foreground font-body">
+                    Pending library sync: {pendingSync.library} | pending feedback sync: {pendingSync.feedback} | needs attention: {pendingSync.needsAttention}
+                  </p>
+                  <Button variant="outline" onClick={handleRetrySync} disabled={syncingNow} className="w-full sm:w-auto">
+                    {syncingNow ? "Retrying..." : "Retry sync"}
+                  </Button>
+                </div>
               </div>
               {isPublicProfile && isValidUsername(normalizeUsername(username)) && (
                 <div className="text-xs text-muted-foreground">Public link: <Link className="underline" to={`/u/${normalizeUsername(username)}`}>/u/{normalizeUsername(username)}</Link></div>
