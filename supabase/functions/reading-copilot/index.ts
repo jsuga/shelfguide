@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
 type LibraryBook = {
   title: string;
   author: string;
@@ -42,6 +44,8 @@ type Recommendation = Candidate & {
   why_new: string;
 };
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -55,7 +59,7 @@ const json = (body: unknown, status = 200) =>
   });
 
 const normalize = (value: string) => value.trim().toLowerCase();
-const compact = (value: string | null | undefined) => value ? value.trim() : "";
+const compact = (value: string | null | undefined) => (value ? value.trim() : "");
 const unique = (values: string[]) =>
   Array.from(new Set(values.map((v) => v.trim()).filter(Boolean)));
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -69,6 +73,8 @@ const getClientIp = (req: Request) => {
   if (forwarded) return forwarded.split(",")[0]?.trim() || null;
   return req.headers.get("x-real-ip") || req.headers.get("cf-connecting-ip") || null;
 };
+
+// ─── Rate limiting ───────────────────────────────────────────────────────────
 
 const checkRateLimit = async (params: {
   key: string;
@@ -115,6 +121,8 @@ const checkRateLimit = async (params: {
   return { allowed: true, retryAfter: 0 };
 };
 
+// ─── Profile builder ─────────────────────────────────────────────────────────
+
 const buildProfile = (books: LibraryBook[]) => {
   const genreCounts: Record<string, number> = {};
   const authorCounts: Record<string, number> = {};
@@ -131,6 +139,8 @@ const buildProfile = (books: LibraryBook[]) => {
 
   return { topGenres: sortTop(genreCounts), topAuthors: sortTop(authorCounts) };
 };
+
+// ─── Book search APIs ────────────────────────────────────────────────────────
 
 const fetchGoogleBooks = async (query: string, limit = 18) => {
   if (!query) return [];
@@ -191,17 +201,86 @@ const fetchOpenLibrary = async (query: string, limit = 18) => {
   }).filter(Boolean) as Candidate[];
 };
 
-const extractJson = (text: string) => {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-  try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+// ─── JSON parsing (hardened for Claude output) ───────────────────────────────
+
+const extractJson = (text: string): any => {
+  // 1. Direct parse
+  try { return JSON.parse(text.trim()); } catch { /* continue */ }
+
+  // 2. Strip markdown fences
+  const stripped = text.replace(/```(?:json)?\s*/gi, "").replace(/```\s*/g, "").trim();
+  try { return JSON.parse(stripped); } catch { /* continue */ }
+
+  // 3. Extract first { ... } substring
+  const start = stripped.indexOf("{");
+  const end = stripped.lastIndexOf("}");
+  if (start !== -1 && end > start) {
+    try { return JSON.parse(stripped.slice(start, end + 1)); } catch { /* continue */ }
+  }
+
+  // 4. Try extracting [ ... ] (array)
+  const aStart = stripped.indexOf("[");
+  const aEnd = stripped.lastIndexOf("]");
+  if (aStart !== -1 && aEnd > aStart) {
+    try {
+      const arr = JSON.parse(stripped.slice(aStart, aEnd + 1));
+      if (Array.isArray(arr)) return { recommendations: arr };
+    } catch { /* continue */ }
+  }
+
+  return null;
 };
+
+// ─── Curated fallback builder ────────────────────────────────────────────────
 
 const buildFallback = (candidates: Candidate[], reasons: string[]): Recommendation[] =>
   candidates.slice(0, 4).map((c) => ({
     ...c, reasons: reasons.slice(0, 2), why_new: "A fresh pick that might surprise you.",
   }));
+
+const STATIC_CURATED: Recommendation[] = [
+  { id: "curated-1", title: "The House in the Cerulean Sea", author: "TJ Klune", genre: "Fantasy", tags: ["cozy", "fantasy", "found family"], summary: "A heartwarming fantasy about finding family in unexpected places.", source: "Curated", reasons: ["Beloved cozy fantasy", "Uplifting and heartfelt"], why_new: "A warm hug of a book loved by readers worldwide." },
+  { id: "curated-2", title: "Project Hail Mary", author: "Andy Weir", genre: "Science Fiction", tags: ["sci-fi", "adventure", "humor"], summary: "A lone astronaut must save Earth with science, wit, and an unlikely ally.", source: "Curated", reasons: ["Gripping sci-fi adventure", "Witty and clever"], why_new: "Science meets heart in this page-turner." },
+  { id: "curated-3", title: "The Thursday Murder Club", author: "Richard Osman", genre: "Mystery", tags: ["cozy mystery", "humor", "british"], summary: "Four retirees meet weekly to investigate cold cases—until a real murder happens.", source: "Curated", reasons: ["Charming cozy mystery", "Laugh-out-loud funny"], why_new: "Proof that the best detectives are over seventy." },
+  { id: "curated-4", title: "Circe", author: "Madeline Miller", genre: "Fantasy", tags: ["mythology", "literary fiction", "feminist"], summary: "The mythological sorceress Circe tells her own epic story of power and transformation.", source: "Curated", reasons: ["Stunning mythological retelling", "Powerful and lyrical"], why_new: "Ancient myth reimagined with breathtaking prose." },
+];
+
+// ─── Fetch curated from DB, fallback to static ──────────────────────────────
+
+const fetchCuratedFromDb = async (
+  client: ReturnType<typeof createClient>,
+  userId: string,
+  limit = 5
+): Promise<Recommendation[]> => {
+  try {
+    // Get popular recommendations from other users (service role bypasses RLS)
+    const { data } = await (client as any)
+      .from("copilot_recommendations")
+      .select("book_id,title,author,genre,tags,summary,source,reasons,why_new")
+      .neq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (data && data.length > 0) {
+      return data.map((r: any) => ({
+        id: r.book_id || `curated-${r.title}`,
+        title: r.title,
+        author: r.author || "Unknown",
+        genre: r.genre || "General",
+        tags: r.tags || [],
+        summary: r.summary || "",
+        source: "Curated",
+        reasons: r.reasons?.length ? r.reasons : ["Popular with readers"],
+        why_new: r.why_new || "A hand-picked recommendation.",
+      }));
+    }
+  } catch (e) {
+    console.warn("[reading-copilot] Failed to fetch curated from DB:", e);
+  }
+  return [];
+};
+
+// ─── Persist history ─────────────────────────────────────────────────────────
 
 const persistHistory = async (
   client: ReturnType<typeof createClient>, userId: string, recommendations: Recommendation[]
@@ -215,7 +294,8 @@ const persistHistory = async (
   await (client as any).from("copilot_recommendations").insert(payload);
 };
 
-/** Fetch with exponential backoff retry for 429/5xx errors */
+// ─── Fetch with exponential backoff ──────────────────────────────────────────
+
 const fetchWithRetry = async (
   url: string, init: RequestInit, maxRetries = 3
 ): Promise<Response> => {
@@ -224,30 +304,28 @@ const fetchWithRetry = async (
     try {
       const res = await fetch(url, init);
       if (res.ok) return res;
-      // Retry on 429 or 5xx
       if (res.status === 429 || res.status >= 500) {
         const body = await res.text().catch(() => "");
         console.warn(`[reading-copilot] LLM attempt ${attempt + 1} failed: ${res.status} ${body}`);
         lastError = new Error(`HTTP ${res.status}: ${body}`);
         if (attempt < maxRetries - 1) {
-          const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
-          await new Promise((r) => setTimeout(r, delay));
+          await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
           continue;
         }
       }
-      // Non-retryable error
       return res;
     } catch (err) {
       console.warn(`[reading-copilot] LLM attempt ${attempt + 1} network error:`, err);
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt < maxRetries - 1) {
-        const delay = Math.pow(2, attempt) * 1000;
-        await new Promise((r) => setTimeout(r, delay));
+        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
       }
     }
   }
   throw lastError || new Error("LLM fetch failed after retries");
 };
+
+// ─── Main handler ────────────────────────────────────────────────────────────
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -256,22 +334,23 @@ serve(async (req) => {
   const body = await req.json().catch(() => ({} as any));
   const debugMode = Boolean((body as any).debug);
 
-  if (debugMode) {
-    const lovableKey = Deno.env.get("LOVABLE_API_KEY") ?? "";
+  // ── Debug probe ──
+  if (debugMode && !(body as any).prompt) {
     const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+    const lovableKey = Deno.env.get("LOVABLE_API_KEY") ?? "";
     return json({
       ok: true, function: "reading-copilot",
       env_present: {
         SUPABASE_URL: Boolean(Deno.env.get("SUPABASE_URL")),
         SUPABASE_ANON_KEY: Boolean(Deno.env.get("SUPABASE_ANON_KEY")),
         SUPABASE_SERVICE_ROLE_KEY: Boolean(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")),
-        LOVABLE_API_KEY: Boolean(lovableKey),
         ANTHROPIC_API_KEY: Boolean(anthropicKey),
+        LOVABLE_API_KEY: Boolean(lovableKey),
         GOOGLE_BOOKS_API_KEY: Boolean(Deno.env.get("GOOGLE_BOOKS_API_KEY")),
         LLM_ENABLED: Deno.env.get("LLM_ENABLED") ?? "true",
       },
-      lovable_key_len: lovableKey.length,
       anthropic_key_len: anthropicKey.length,
+      lovable_key_len: lovableKey.length,
     });
   }
 
@@ -296,6 +375,7 @@ serve(async (req) => {
 
   const { prompt = "", tags = [], surprise = 35, limit: reqLimit = 4 } = body as any;
 
+  // ── Rate limiting ──
   const ip = getClientIp(req);
   const rateLimitClient = serviceClient || supabase;
   const userLimit = Number(Deno.env.get("COPILOT_USER_LIMIT")) || 200;
@@ -309,6 +389,7 @@ serve(async (req) => {
     return json({ error: "Rate limit exceeded. Please try again later.", retry_after: rateResult.retryAfter }, 429);
   }
 
+  // ── Fetch user data ──
   const [booksRes, prefsRes, feedbackRes] = await Promise.all([
     (supabase as any).from("books").select("*").eq("user_id", user.id),
     (supabase as any).from("copilot_preferences").select("*").eq("user_id", user.id).maybeSingle(),
@@ -329,8 +410,10 @@ serve(async (req) => {
   const queryParts = [compact(prompt), ...preferences.preferred_genres.slice(0, 3), ...topGenres.slice(0, 2)].filter(Boolean);
   const query = unique(queryParts).join(" ");
 
+  // ── Fetch candidates from search APIs ──
   const [googleResults, openLibraryResults] = await Promise.all([
-    fetchGoogleBooks(query, 18), fetchOpenLibrary(query, 18),
+    fetchGoogleBooks(query || "popular fiction bestseller", 18),
+    fetchOpenLibrary(query || "popular fiction", 18),
   ]);
 
   const libraryTitles = new Set(books.map((b) => normalize(b.title)));
@@ -349,113 +432,127 @@ serve(async (req) => {
 
   const candidates = Array.from(candidateMap.values()).slice(0, 12);
 
-  // --- LLM-first flow ---
+  // ── Helper: get curated fallback (DB then static) ──
+  const getCuratedFallback = async (): Promise<Recommendation[]> => {
+    // First try from candidates
+    if (candidates.length > 0) {
+      return buildFallback(candidates, ["Matches your library's vibe.", "A popular reader favorite."]);
+    }
+    // Then try DB
+    if (serviceClient) {
+      const dbCurated = await fetchCuratedFromDb(serviceClient, user.id, 5);
+      if (dbCurated.length > 0) return dbCurated;
+    }
+    // Static fallback
+    return STATIC_CURATED.slice(0, 4);
+  };
+
+  // ── LLM flow ──
   const llmEnabled = (Deno.env.get("LLM_ENABLED") ?? "true") !== "false";
-  const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
   const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
-  const warnings: string[] = [];
+  const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
+  const debugInfo: any = debugMode ? {
+    provider_attempted: "none",
+    model_attempted: null,
+    raw_llm_text: null,
+    parse_attempts: [] as string[],
+    curated_count: 0,
+    anthropic_status: null,
+    candidate_count: candidates.length,
+  } : null;
 
   if (!llmEnabled) {
-    const fallback = buildFallback(candidates, ["Matches your library's vibe.", "A popular reader favorite."]);
+    const fallback = await getCuratedFallback();
+    if (debugInfo) debugInfo.curated_count = fallback.length;
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
+      provider: "curated", model: null,
       warnings: ["LLM is disabled by configuration. Showing curated picks."],
+      ...(debugInfo ? { debug: debugInfo } : {}),
     });
   }
 
-  if (!lovableApiKey && !anthropicKey) {
-    const fallback = buildFallback(candidates, ["Matches your library's vibe.", "A popular reader favorite."]);
+  if (!anthropicKey && !lovableApiKey) {
+    const fallback = await getCuratedFallback();
+    if (debugInfo) debugInfo.curated_count = fallback.length;
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
+      provider: "curated", model: null,
       warnings: [],
-      error: { code: "MISSING_AI_KEY", message: "No AI API key configured. Please add LOVABLE_API_KEY or ANTHROPIC_API_KEY." },
+      error: { code: "MISSING_ANTHROPIC_KEY", message: "No AI API key configured. Please add ANTHROPIC_API_KEY." },
+      ...(debugInfo ? { debug: debugInfo } : {}),
     });
   }
 
+  // ── Build prompts ──
   const accepted = feedback.filter((e) => e.decision === "accepted").slice(0, 4);
   const rejected = feedback.filter((e) => e.decision === "rejected").slice(0, 4);
 
   const systemPrompt = [
     "You are a ShelfGuide copilot that recommends books.",
-    "Use the candidates list only; do not invent books.",
-    "Return JSON only, matching the schema exactly.",
+    "You MUST select from the candidates list provided. Do not invent books.",
+    "Return ONLY valid JSON. No markdown. No code fences. No commentary. No explanation.",
+    "If the candidates list is empty or you cannot make recommendations, return: {\"recommendations\": []}",
     "Use the surprise value to balance familiar vs. diverse picks.",
     "Each reason must be max 12 words. Give exactly 2 reasons per book.",
     "why_new must be a short personable sentence, max 18 words.",
-    "Be concise, warm, and personable. No jargon.",
-  ].join(" ");
+    "",
+    "Required JSON schema:",
+    "{\"recommendations\": [{\"id\": \"string\", \"reasons\": [\"string\", \"string\"], \"why_new\": \"string\"}]}",
+    "",
+    "Example valid response:",
+    "{\"recommendations\": [{\"id\": \"abc123\", \"reasons\": [\"Perfect cozy read for winter\", \"Beloved by fantasy fans\"], \"why_new\": \"A fresh take that will surprise you.\"}]}",
+  ].join("\n");
 
-  const userPrompt = {
+  const userPrompt = JSON.stringify({
     prompt: compact(prompt), surprise,
     diversity_rule: surprise >= 70 ? "Include at least one recommendation outside the top genres."
       : surprise <= 30 ? "Prefer recommendations aligned with top genres."
       : "Balance familiar and fresh picks.",
     preferences,
-    atmosphere: preferences.atmosphere || (preferences as any).ui_theme || "cozy",
+    atmosphere: preferences.atmosphere || "cozy",
     profile, accepted, rejected,
     candidates: candidates.map((c) => ({
       id: c.id, title: c.title, author: c.author, genre: c.genre,
       tags: c.tags.slice(0, 6), summary: c.summary.slice(0, 240), source: c.source,
     })),
-    output_schema: { recommendations: [{ id: "string", reasons: ["string"], why_new: "string" }] },
-  };
+  });
 
-  // Try Lovable AI Gateway first, then Anthropic — both with retry
+  // ── Try Anthropic first, then Lovable AI Gateway ──
   let llmResponse: Response | null = null;
   let modelUsed = "";
+  let providerUsed = "curated";
   let llmError: string | null = null;
 
-  if (lovableApiKey) {
-    const gatewayModel = "google/gemini-2.5-flash";
-    try {
-      llmResponse = await fetchWithRetry("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${lovableApiKey}` },
-        body: JSON.stringify({
-          model: gatewayModel, max_tokens: 800, temperature: 0.7,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: JSON.stringify(userPrompt) },
-          ],
-        }),
-      }, 3);
-      if (llmResponse.ok) {
-        modelUsed = gatewayModel;
-      } else {
-        const errText = await llmResponse.text().catch(() => "");
-        console.warn("[reading-copilot] Lovable Gateway final failure:", llmResponse.status, errText);
-        llmError = `Lovable Gateway ${llmResponse.status}`;
-        llmResponse = null;
-      }
-    } catch (err) {
-      console.warn("[reading-copilot] Lovable Gateway error after retries:", err);
-      llmError = String(err);
-      llmResponse = null;
-    }
-  }
-
-  if (!llmResponse && anthropicKey) {
+  if (anthropicKey) {
     const anthropicModel = Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514";
+    if (debugInfo) { debugInfo.provider_attempted = "anthropic"; debugInfo.model_attempted = anthropicModel; }
     try {
       llmResponse = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+          "x-api-key": anthropicKey,
+          "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
           model: anthropicModel, max_tokens: 800, temperature: 0.7,
           system: systemPrompt,
-          messages: [{ role: "user", content: JSON.stringify(userPrompt) }],
+          messages: [{ role: "user", content: userPrompt }],
         }),
       }, 3);
       if (llmResponse.ok) {
         modelUsed = anthropicModel;
+        providerUsed = "anthropic";
+        if (debugInfo) debugInfo.anthropic_status = 200;
       } else {
+        const status = llmResponse.status;
         const errText = await llmResponse.text().catch(() => "");
-        console.warn("[reading-copilot] Anthropic final failure:", llmResponse.status, errText);
-        llmError = `Anthropic ${llmResponse.status}`;
+        console.warn("[reading-copilot] Anthropic final failure:", status, errText);
+        if (debugInfo) debugInfo.anthropic_status = status;
+        llmError = status === 429 ? "ANTHROPIC_RATE_LIMIT" : `ANTHROPIC_UPSTREAM_ERROR (${status})`;
         llmResponse = null;
       }
     } catch (err) {
@@ -465,38 +562,90 @@ serve(async (req) => {
     }
   }
 
-  // If both LLM providers failed after retries
+  // Fallback to Lovable AI Gateway if Anthropic failed
+  if (!llmResponse && lovableApiKey) {
+    const gatewayModel = "google/gemini-2.5-flash";
+    if (debugInfo) { debugInfo.provider_attempted = "lovable_gateway"; debugInfo.model_attempted = gatewayModel; }
+    try {
+      llmResponse = await fetchWithRetry("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${lovableApiKey}` },
+        body: JSON.stringify({
+          model: gatewayModel, max_tokens: 800, temperature: 0.7,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        }),
+      }, 3);
+      if (llmResponse.ok) {
+        modelUsed = gatewayModel;
+        providerUsed = "lovable_gateway";
+      } else {
+        const errText = await llmResponse.text().catch(() => "");
+        console.warn("[reading-copilot] Lovable Gateway final failure:", llmResponse.status, errText);
+        llmError = llmError || `Lovable Gateway ${llmResponse.status}`;
+        llmResponse = null;
+      }
+    } catch (err) {
+      console.warn("[reading-copilot] Lovable Gateway error after retries:", err);
+      llmError = llmError || String(err);
+      llmResponse = null;
+    }
+  }
+
+  // ── Both providers failed ──
   if (!llmResponse) {
-    const fallback = buildFallback(candidates, ["Matches your library's vibe.", "Hand-picked from search results."]);
+    const fallback = await getCuratedFallback();
+    if (debugInfo) debugInfo.curated_count = fallback.length;
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
+      provider: "curated", model: null,
       warnings: ["AI service temporarily unavailable. Showing curated picks."],
-      error: { code: "LLM_UNAVAILABLE", message: llmError || "All LLM providers failed after retries." },
+      error: { code: llmError?.includes("RATE_LIMIT") ? "ANTHROPIC_RATE_LIMIT" : "LLM_UNAVAILABLE", message: llmError || "All LLM providers failed after retries." },
+      ...(debugInfo ? { debug: debugInfo } : {}),
     });
   }
 
+  // ── Parse LLM response ──
   const llmPayload = await llmResponse.json();
-
   let textBlock = "";
-  if (llmPayload.choices && Array.isArray(llmPayload.choices)) {
+
+  // Anthropic format: { content: [{ type: "text", text: "..." }] }
+  if (Array.isArray(llmPayload.content)) {
+    textBlock = llmPayload.content
+      .map((part: any) => (asRecord(part).text ? String(asRecord(part).text) : ""))
+      .join("\n");
+  }
+  // OpenAI-compatible format: { choices: [{ message: { content: "..." } }] }
+  else if (llmPayload.choices && Array.isArray(llmPayload.choices)) {
     textBlock = llmPayload.choices[0]?.message?.content || "";
-  } else if (Array.isArray(llmPayload.content)) {
-    textBlock = llmPayload.content.map((part: any) => (asRecord(part).text ? String(asRecord(part).text) : "")).join("\n");
+  }
+
+  if (debugInfo) {
+    debugInfo.raw_llm_text = textBlock.slice(0, 5000);
+    debugInfo.parse_attempts = [];
   }
 
   const parsed = extractJson(textBlock);
+  if (debugInfo) debugInfo.parse_attempts.push(parsed ? "extractJson: success" : "extractJson: failed");
+
   if (!parsed || !Array.isArray(parsed.recommendations)) {
-    console.warn("[reading-copilot] Failed to parse LLM JSON, using fallback. Raw:", textBlock.slice(0, 300));
-    const fallback = buildFallback(candidates, ["Matches your library's vibe.", "Hand-picked from search results."]);
+    console.warn("[reading-copilot] Failed to parse LLM JSON. Raw:", textBlock.slice(0, 500));
+    const fallback = await getCuratedFallback();
+    if (debugInfo) debugInfo.curated_count = fallback.length;
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
+      provider: "curated", model: modelUsed,
       warnings: ["AI response could not be parsed. Showing curated picks."],
       error: { code: "LLM_PARSE_ERROR", message: "Could not parse structured response from AI." },
+      ...(debugInfo ? { debug: debugInfo } : {}),
     });
   }
 
+  // ── Map LLM picks to candidates ──
   const recs = parsed.recommendations
     .map((rec: any) => {
       const r = asRecord(rec);
@@ -513,18 +662,23 @@ serve(async (req) => {
 
   if (recs.length === 0) {
     console.warn("[reading-copilot] AI returned IDs that didn't match candidates. Falling back.");
-    const fallback = buildFallback(candidates, ["Matches your library's vibe.", "Hand-picked from search results."]);
+    const fallback = await getCuratedFallback();
+    if (debugInfo) debugInfo.curated_count = fallback.length;
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
+      provider: "curated", model: modelUsed,
       warnings: ["AI picks didn't match available books. Showing curated picks."],
       error: { code: "LLM_NO_MATCH", message: "AI candidate IDs did not match search results." },
+      ...(debugInfo ? { debug: debugInfo } : {}),
     });
   }
 
   await persistHistory(supabase, user.id, recs);
   return json({
     recommendations: recs, llm_used: true, source: "llm",
-    warnings, model: modelUsed,
+    provider: providerUsed, model: modelUsed,
+    warnings: [],
+    ...(debugInfo ? { debug: debugInfo } : {}),
   });
 });
