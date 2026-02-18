@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import BookCard from "@/components/books/BookCard";
 import BookGrid from "@/components/books/BookGrid";
 import { supabase } from "@/integrations/supabase/client";
@@ -25,13 +26,20 @@ const PublicProfile = () => {
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const [books, setBooks] = useState<PublicBook[]>([]);
   const [loading, setLoading] = useState(true);
+  const [privateMessage, setPrivateMessage] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   useEffect(() => {
     const loadPage = async () => {
       setLoading(true);
+      setPrivateMessage(null);
+      setFetchError(null);
       const { data: sessionData } = await supabase.auth.getSession();
       const viewerId = sessionData.session?.user?.id ?? null;
       setViewerUserId(viewerId);
+      if (import.meta.env.DEV) {
+        console.log("[Community] PublicProfile load:", { username, viewerId });
+      }
 
       const { data: foundProfile } = await (supabase as any)
         .from("profiles")
@@ -49,18 +57,29 @@ const PublicProfile = () => {
       const castProfile = foundProfile as ProfileRow;
       if (!canAccessPublicLibrary(viewerId, castProfile)) {
         setProfile(null);
+        setPrivateMessage("This library is private.");
         setBooks([]);
         setLoading(false);
         return;
       }
 
       setProfile(castProfile);
-      const { data: profileBooks } = await (supabase as any)
+      const { data: profileBooks, error: booksError } = await (supabase as any)
         .from("books")
         .select("id,title,author,genre,status,series_name,cover_url,thumbnail,cover_storage_path")
         .eq("user_id", castProfile.user_id)
         .order("created_at", { ascending: false })
         .limit(200);
+      if (booksError) {
+        if (import.meta.env.DEV) {
+          console.warn("[Community] PublicProfile books fetch failed:", booksError);
+        }
+        setFetchError(booksError.message || "Could not load library.");
+        setPrivateMessage("This library is private.");
+        setBooks([]);
+        setLoading(false);
+        return;
+      }
       setBooks((profileBooks || []) as PublicBook[]);
       setLoading(false);
     };
@@ -86,10 +105,22 @@ const PublicProfile = () => {
       <main className="container mx-auto px-4 pt-24 pb-16">
         <Card className="border-border/60 bg-card/70 max-w-2xl">
           <CardContent className="p-6">
-            <h1 className="font-display text-3xl font-bold">This profile is private.</h1>
+            <h1 className="font-display text-3xl font-bold">
+              {privateMessage || "This library is private."}
+            </h1>
             <p className="text-sm text-muted-foreground mt-2">
               You can only view public libraries.
             </p>
+            {fetchError && (
+              <p className="text-xs text-muted-foreground mt-3">
+                {import.meta.env.DEV ? `Debug: ${fetchError}` : ""}
+              </p>
+            )}
+            <div className="mt-4">
+              <Button asChild variant="outline">
+                <Link to="/community">Back to Community</Link>
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </main>
