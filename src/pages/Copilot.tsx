@@ -433,6 +433,45 @@ const Copilot = () => {
     return () => { listener.subscription.unsubscribe(); };
   }, []);
 
+  const fetchTbrRecommendations = async () => {
+    if (!userId) { toast.error("Sign in to get TBR recommendations."); return; }
+    setLoadingRecommendations(true);
+    setStatusMessage(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("recommend-from-library", {
+        body: { n: 5 },
+      });
+      if (error || !data) {
+        let reason = "TBR recommendation service unavailable.";
+        if (error?.message?.includes("401")) reason = "Session expired. Please sign in again.";
+        else if (error?.message?.includes("429")) reason = "Too many requests. Try again in a moment.";
+        setStatusMessage(reason);
+        setLoadingRecommendations(false);
+        return;
+      }
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        setStatusMessage(data.warnings[0]);
+      }
+      const mapped = (data.recommendations || []).map((r: any) => ({
+        id: r.id,
+        title: r.title,
+        author: r.author,
+        genre: r.genre || "General",
+        tags: r.tags || [],
+        summary: (r.reasons || []).join(". "),
+        source: r.source || "claude",
+        reasons: r.reasons || [],
+        why_new: "From your TBR list",
+      }));
+      setRecommendations(mapped);
+      await loadHistory(userId);
+    } catch (e) {
+      console.error("[ShelfGuide] TBR recommendation error:", e);
+      setStatusMessage("Failed to get TBR recommendations.");
+    }
+    setLoadingRecommendations(false);
+  };
+
   const fetchRecommendations = async () => {
     setLoadingRecommendations(true);
     setStatusMessage(null);
@@ -607,7 +646,8 @@ const Copilot = () => {
             </div>
             <div className="flex flex-wrap gap-3">
               <Button onClick={fetchRecommendations} disabled={loadingRecommendations}><Sparkles className="w-4 h-4 mr-2" />{loadingRecommendations ? "Thinking..." : "Generate picks"}</Button>
-              <Button variant="outline" onClick={resetFeedback}><RefreshCcw className="w-4 h-4 mr-2" />Reset feedback</Button>
+               <Button variant="secondary" onClick={fetchTbrRecommendations} disabled={loadingRecommendations || !userId}><BookOpen className="w-4 h-4 mr-2" />{loadingRecommendations ? "Thinking..." : "Recommend from My TBR"}</Button>
+               <Button variant="outline" onClick={resetFeedback}><RefreshCcw className="w-4 h-4 mr-2" />Reset feedback</Button>
             </div>
           </div>
           <div className="mt-8 grid gap-4">
