@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 
-const COOLDOWN_SECONDS = 30;
+const COOLDOWN_SECONDS = 90;
 
 type PasswordResetResendProps = {
   defaultEmail?: string;
@@ -26,7 +26,6 @@ const PasswordResetResend = ({
   const [submitting, setSubmitting] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
-  const [devError, setDevError] = useState<string | null>(null);
 
   useEffect(() => {
     setEmail(defaultEmail || "");
@@ -41,28 +40,47 @@ const PasswordResetResend = ({
   }, [cooldown]);
 
   const sendReset = async () => {
+    if (submitting || cooldown > 0) return;
     if (!email.trim()) {
       toast.error("Enter your email to receive a reset link.");
       return;
     }
     setSubmitting(true);
     setMessage(null);
-    setDevError(null);
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: `${window.location.origin}/reset-password`,
     });
     setSubmitting(false);
+
     if (error) {
-      setMessage("Couldn't send email, please try again.");
-      const detail = [error.code, error.message].filter(Boolean).join(" - ");
-      setDevError(detail || null);
-      toast.error("Couldn't send email, please try again.");
+      const msg = error.message || "";
+      const status = (error as any).status;
+      const isRateLimit =
+        status === 429 ||
+        msg.toLowerCase().includes("rate") ||
+        msg.toLowerCase().includes("429");
+
+      if (isRateLimit) {
+        const rateLimitMsg =
+          "Too many reset emails were sent. Please wait a few minutes and try again.";
+        setMessage(rateLimitMsg);
+        toast.error(rateLimitMsg);
+        setCooldown(COOLDOWN_SECONDS);
+      } else {
+        setMessage(msg || "Couldn't send email, please try again.");
+        toast.error(msg || "Couldn't send email, please try again.");
+      }
       return;
     }
+
     setCooldown(COOLDOWN_SECONDS);
-    setMessage("If an account exists for that email, a new reset link has been sent.");
-    toast.success("If an account exists for that email, a new reset link has been sent.");
+    setMessage(
+      "If an account exists for that email, a reset link has been sent. Check your inbox (and spam)."
+    );
+    toast.success("Reset email sent — check your inbox.");
   };
+
+  const isDisabled = submitting || cooldown > 0;
 
   return (
     <div className={className}>
@@ -81,21 +99,14 @@ const PasswordResetResend = ({
       {message && (
         <p className="text-xs text-muted-foreground mt-2">{message}</p>
       )}
-      {devError && import.meta.env.DEV && (
-        <p className="text-[11px] text-muted-foreground mt-1">Debug: {devError}</p>
-      )}
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <Button type="button" onClick={() => void sendReset()} disabled={submitting}>
-          {submitting ? "Sending..." : primaryLabel}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => void sendReset()}
-          disabled={submitting || cooldown > 0}
-        >
-          {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend"}
+        <Button type="button" onClick={() => void sendReset()} disabled={isDisabled}>
+          {submitting
+            ? "Sending..."
+            : cooldown > 0
+            ? `Try again in ${cooldown}s`
+            : primaryLabel}
         </Button>
         {onBackToSignIn && (
           <Button type="button" variant="ghost" onClick={onBackToSignIn}>
