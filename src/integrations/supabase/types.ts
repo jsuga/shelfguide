@@ -157,7 +157,6 @@ export type Database = {
       }
       copilot_preferences: {
         Row: {
-          atmosphere: string | null
           avoided_genres: string[] | null
           created_at: string | null
           id: string
@@ -170,7 +169,6 @@ export type Database = {
           user_id: string
         }
         Insert: {
-          atmosphere?: string | null
           avoided_genres?: string[] | null
           created_at?: string | null
           id?: string
@@ -183,7 +181,6 @@ export type Database = {
           user_id: string
         }
         Update: {
-          atmosphere?: string | null
           avoided_genres?: string[] | null
           created_at?: string | null
           id?: string
