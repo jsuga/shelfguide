@@ -31,6 +31,7 @@ export type Database = {
           description: string | null
           genre: string | null
           goodreads_book_id: string | null
+          google_volume_id: string | null
           id: string
           is_first_in_series: boolean | null
           isbn: string | null
@@ -63,6 +64,7 @@ export type Database = {
           description?: string | null
           genre?: string | null
           goodreads_book_id?: string | null
+          google_volume_id?: string | null
           id?: string
           is_first_in_series?: boolean | null
           isbn?: string | null
@@ -95,6 +97,7 @@ export type Database = {
           description?: string | null
           genre?: string | null
           goodreads_book_id?: string | null
+          google_volume_id?: string | null
           id?: string
           is_first_in_series?: boolean | null
           isbn?: string | null
