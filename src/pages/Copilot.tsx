@@ -325,6 +325,7 @@ const Copilot = () => {
   const [selectedHistory, setSelectedHistory] = useState<HistoryEntry | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [cloudNotice, setCloudNotice] = useState<string | null>(null);
+  const [lastRecommendMode, setLastRecommendMode] = useState<"general" | "tbr">("general");
 
   const promptTags = useMemo(() => derivePromptTags(prompt, selectedTags), [prompt, selectedTags]);
   const profile = useMemo(() => buildProfile(books), [books]);
@@ -437,6 +438,7 @@ const Copilot = () => {
     if (!userId) { toast.error("Sign in to get TBR recommendations."); return; }
     setLoadingRecommendations(true);
     setStatusMessage(null);
+    setLastRecommendMode("tbr");
     try {
       const { data, error } = await supabase.functions.invoke("recommend-from-library", {
         body: { n: 5 },
@@ -481,6 +483,7 @@ const Copilot = () => {
   const fetchRecommendations = async () => {
     setLoadingRecommendations(true);
     setStatusMessage(null);
+    setLastRecommendMode("general");
     if (userId) {
       const tastePayload = tasteSummary.hasRatings
         ? {
@@ -732,7 +735,7 @@ const Copilot = () => {
           {statusMessage && (
             <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-4 text-sm text-muted-foreground flex items-center justify-between gap-3">
               <span>{statusMessage}</span>
-              <Button size="sm" variant="outline" onClick={fetchRecommendations} disabled={loadingRecommendations}>Retry</Button>
+              <Button size="sm" variant="outline" onClick={lastRecommendMode === "tbr" ? fetchTbrRecommendations : fetchRecommendations} disabled={loadingRecommendations}>Retry</Button>
             </div>
           )}
           {recommendations.length === 0 ? (
