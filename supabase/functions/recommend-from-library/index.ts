@@ -91,12 +91,34 @@ const fetchWithRetry = async (
   throw lastError || new Error("Fetch failed after retries");
 };
 
-// ─── Deterministic fallback pick ─────────────────────────────────────────────
+// ─── Smart fallback pick with reasons ────────────────────────────────────────
 
-const deterministicPick = (candidates: TbrCandidate[], n: number): TbrCandidate[] => {
-  // Stable sort by title, pick first n
-  const sorted = [...candidates].sort((a, b) => a.title.localeCompare(b.title));
-  return sorted.slice(0, n);
+const smartFallbackPick = (candidates: TbrCandidate[], n: number): RecommendationOut[] => {
+  // Shuffle candidates for variety on each call
+  const shuffled = [...candidates].sort(() => Math.random() - 0.5);
+  const picks = shuffled.slice(0, n);
+
+  const reasonTemplates = [
+    (c: TbrCandidate) => c.genre ? `A great ${c.genre} pick from your TBR` : "Waiting on your TBR — give it a try",
+    (c: TbrCandidate) => c.series_name ? `Continue the ${c.series_name} series` : `By ${c.author} — a solid choice`,
+    (_c: TbrCandidate) => "This one hasn't been recommended recently",
+    (_c: TbrCandidate) => "A fresh pick to shake up your reading list",
+  ];
+
+  return picks.map((c) => {
+    const r1 = reasonTemplates[Math.floor(Math.random() * reasonTemplates.length)](c);
+    const r2 = reasonTemplates[Math.floor(Math.random() * reasonTemplates.length)](c);
+    return {
+      id: c.id,
+      title: c.title,
+      author: c.author,
+      genre: c.genre || "General",
+      tags: [],
+      google_volume_id: c.google_volume_id || null,
+      reasons: [r1, r2 !== r1 ? r2 : "A worthy addition to your reading queue"],
+      source: "recommendation_engine",
+    };
+  });
 };
 
 // ─── Main handler ────────────────────────────────────────────────────────────
@@ -174,20 +196,11 @@ serve(async (req) => {
   } : null;
 
   if (!anthropicKey) {
-    // Deterministic fallback
-    const picks = deterministicPick(candidates, n);
-    const recs = picks.map((c) => ({
-      id: c.id, title: c.title, author: c.author,
-      genre: c.genre || "General", tags: [],
-      google_volume_id: c.google_volume_id || null,
-      reasons: ["Selected from your TBR list"],
-      source: "deterministic_fallback",
-    }));
+    const recs = smartFallbackPick(candidates, n);
     return json({
-      recommendations: recs, llm_used: false, provider: "none", model: null,
+      recommendations: recs, llm_used: false, provider: "recommendation_engine", model: null,
       is_tbr_strict: true,
       warnings: [],
-      error: { code: "MISSING_ANTHROPIC_KEY", message: "No Anthropic API key configured." },
       ...(debugInfo ? { debug: debugInfo } : {}),
     });
   }
@@ -303,14 +316,7 @@ serve(async (req) => {
 
   // ── Fallback if Claude failed or returned no valid IDs ──
   if (!llmSuccess || validRecs.length === 0) {
-    const picks = deterministicPick(candidates, n);
-    validRecs = picks.map((c) => ({
-      id: c.id, title: c.title, author: c.author,
-      genre: c.genre || "General", tags: [],
-      google_volume_id: c.google_volume_id || null,
-      reasons: ["Quick pick from your TBR list"],
-      source: "deterministic_fallback",
-    }));
+    validRecs = smartFallbackPick(candidates, n);
   }
 
   // ── Persist to history ──
@@ -332,10 +338,10 @@ serve(async (req) => {
     console.warn("[recommend-from-library] Failed to persist history:", e);
   }
 
-  return json({
+    return json({
     recommendations: validRecs,
     llm_used: llmSuccess,
-    provider: llmSuccess ? "anthropic" : "deterministic_fallback",
+    provider: llmSuccess ? "anthropic" : "recommendation_engine",
     model: llmSuccess ? anthropicModel : null,
     is_tbr_strict: true,
     warnings: [],

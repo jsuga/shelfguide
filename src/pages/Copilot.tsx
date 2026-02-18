@@ -444,22 +444,19 @@ const Copilot = () => {
         body: { n: 5 },
       });
       if (error || !data) {
-        let reason = "TBR recommendation service unavailable.";
-        if (error?.message?.includes("401")) reason = "Session expired. Please sign in again.";
-        else if (error?.message?.includes("429")) reason = "Too many requests. Try again in a moment.";
-        setStatusMessage(reason);
+        // Network-level failure: silently retry is not possible, but don't mention AI
+        if (error?.message?.includes("401")) {
+          setStatusMessage("Session expired. Please sign in again.");
+        } else if (error?.message?.includes("429")) {
+          setStatusMessage("Too many requests. Try again in a moment.");
+        } else {
+          setStatusMessage(null);
+        }
         setLoadingRecommendations(false);
         return;
       }
-      // For is_tbr_strict responses, never show mismatch banners
-      const isTbrStrict = data.is_tbr_strict === true;
-      if (!isTbrStrict && Array.isArray(data.warnings) && data.warnings.length > 0) {
-        setStatusMessage(data.warnings[0]);
-      } else if (isTbrStrict && !data.llm_used && data.recommendations?.length > 0) {
-        setStatusMessage("Quick pick from your TBR — AI was unavailable.");
-      } else {
-        setStatusMessage(null);
-      }
+      // Never surface AI status to the user — all picks look the same
+      setStatusMessage(null);
       const mapped = (data.recommendations || []).map((r: any) => ({
         id: r.id,
         title: r.title,
