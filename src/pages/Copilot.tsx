@@ -440,8 +440,12 @@ const Copilot = () => {
     setStatusMessage(null);
     setLastRecommendMode("tbr");
     try {
+      // Pass genre selections and mood from Signal Console for filtering + diversity
+      const selectedGenreLabels = selectedTags
+        .filter((t) => MOOD_TAGS.find((m) => m.id === t))
+        .map((t) => MOOD_TAGS.find((m) => m.id === t)?.label || t);
       const { data, error } = await supabase.functions.invoke("recommend-from-library", {
-        body: { n: 5 },
+        body: { genres: selectedGenreLabels, mood: prompt },
       });
       if (error || !data) {
         // Network-level failure: silently retry is not possible, but don't mention AI
