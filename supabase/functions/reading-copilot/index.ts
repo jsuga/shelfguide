@@ -247,7 +247,7 @@ const extractJson = (text: string): any => {
 
 const buildFallback = (candidates: Candidate[], reasons: string[], seed: number): Recommendation[] => {
   const shuffled = seededShuffle(candidates, seed);
-  return shuffled.slice(0, 4).map((c) => ({
+  return shuffled.slice(0, 3).map((c) => ({
     ...c, reasons: reasons.slice(0, 2), why_new: "A fresh pick that might surprise you.",
   }));
 };
@@ -409,7 +409,7 @@ serve(async (req) => {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   const serviceClient = serviceKey ? createClient(supabaseUrl, serviceKey) : null;
 
-  const { prompt = "", tags = [], surprise = 35, limit: reqLimit = 4 } = body as any;
+  const { prompt = "", tags = [], limit: reqLimit = 3 } = body as any;
 
   // ── Generate a unique seed for this request ──
   const seed = Date.now() ^ (Math.random() * 0xffffffff);
@@ -474,7 +474,7 @@ serve(async (req) => {
   const allCandidates = Array.from(candidateMap.values());
   const freshCandidates = allCandidates.filter((c) => !recentExcludes.has(c.id));
   // Use fresh candidates if enough, otherwise fall back to all
-  const candidates = (freshCandidates.length >= 4 ? freshCandidates : allCandidates).slice(0, 12);
+  const candidates = (freshCandidates.length >= 3 ? freshCandidates : allCandidates).slice(0, 12);
   // Shuffle with seed for variety
   const shuffledCandidates = seededShuffle(candidates, seed);
 
@@ -485,9 +485,9 @@ serve(async (req) => {
     }
     if (serviceClient) {
       const dbCurated = await fetchCuratedFromDb(serviceClient, user.id, 5);
-      if (dbCurated.length > 0) return seededShuffle(dbCurated, seed).slice(0, 4);
+      if (dbCurated.length > 0) return seededShuffle(dbCurated, seed).slice(0, 3);
     }
-    return seededShuffle(STATIC_CURATED, seed).slice(0, 4);
+    return seededShuffle(STATIC_CURATED, seed).slice(0, 3);
   };
 
   // ── LLM flow ──
@@ -538,9 +538,9 @@ serve(async (req) => {
     "You MUST select from the candidates list provided. Do not invent books.",
     "Return ONLY valid JSON. No markdown. No code fences. No commentary. No explanation.",
     "If the candidates list is empty or you cannot make recommendations, return: {\"recommendations\": []}",
-    "Use the surprise value to balance familiar vs. diverse picks.",
     "Each reason must be max 12 words. Give exactly 2 reasons per book.",
     "why_new must be a short personable sentence, max 18 words.",
+    `Select exactly 3 books. No more, no less (unless fewer than 3 candidates exist).`,
     "",
     "IMPORTANT: Provide a DIFFERENT mix each time. Include at least 2 new authors or subgenres compared to typical picks.",
     excludeIds.length > 0 ? `Do NOT recommend these IDs (recently shown): ${excludeIds.join(", ")}` : "",
@@ -550,10 +550,7 @@ serve(async (req) => {
   ].filter(Boolean).join("\n");
 
   const userPrompt = JSON.stringify({
-    prompt: compact(prompt), surprise, seed,
-    diversity_rule: surprise >= 70 ? "Include at least one recommendation outside the top genres."
-      : surprise <= 30 ? "Prefer recommendations aligned with top genres."
-      : "Balance familiar and fresh picks.",
+    prompt: compact(prompt), seed,
     variation_hint: "Provide a different mix than last time.",
     preferences,
     atmosphere: preferences.atmosphere || "cozy",
@@ -695,7 +692,7 @@ serve(async (req) => {
       } as Recommendation;
     })
     .filter(Boolean)
-    .slice(0, Math.max(1, Math.min(6, Number(reqLimit) || 4))) as Recommendation[];
+    .slice(0, 3) as Recommendation[];
 
   if (recs.length === 0) {
     console.warn("[reading-copilot] AI returned IDs that didn't match candidates. Falling back.");

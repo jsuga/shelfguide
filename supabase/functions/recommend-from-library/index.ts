@@ -225,16 +225,13 @@ serve(async (req) => {
     });
   }
 
-  // ── Compute dynamic n: ceil(30% of total TBR), min 3 ──
-  const tbrTotal = allTbr.length;
-  const requestedN = body.n ? Math.min(Math.max(Number(body.n) || 5, 1), 50) : null;
-  const dynamicN = Math.max(3, Math.ceil(0.3 * tbrTotal));
-  const n = requestedN ? Math.max(requestedN, dynamicN) : dynamicN;
-  const finalN = Math.min(n, tbrTotal);
+  // ── Always return exactly 3 (or fewer if pool is small) ──
+  const FIXED_N = 3;
 
-  // ── Filter by selected genres if provided ──
+  // ── Filter by selected genres if provided (STRICT: no off-genre fills) ──
   let genreFiltered: TbrCandidate[];
-  if (selectedGenres.length > 0 && !selectedGenres.includes("Any")) {
+  const strictGenreMode = selectedGenres.length > 0 && !selectedGenres.includes("Any");
+  if (strictGenreMode) {
     const lowerGenres = new Set(selectedGenres.map((g) => g.toLowerCase()));
     genreFiltered = allTbr.filter((c) => c.genre && lowerGenres.has(c.genre.toLowerCase()));
   } else {
@@ -246,29 +243,30 @@ serve(async (req) => {
 
   // ── Build candidate pool with exclude logic ──
   const freshGenreFiltered = genreFiltered.filter((c) => !recentExcludes.has(c.id));
-  const freshAll = allTbr.filter((c) => !recentExcludes.has(c.id));
 
+  // Build final candidate list: prefer fresh, fall back to all genre-matched
   let candidates: TbrCandidate[];
-  if (freshGenreFiltered.length >= finalN) {
-    // Enough fresh genre-matched candidates
-    candidates = seededShuffle(freshGenreFiltered, seed).slice(0, finalN);
-  } else if (genreFiltered.length >= finalN) {
+  if (freshGenreFiltered.length >= FIXED_N) {
+    candidates = seededShuffle(freshGenreFiltered, seed).slice(0, FIXED_N);
+  } else if (genreFiltered.length >= FIXED_N) {
     // Use fresh first, fill with recently-shown genre matches
     const fresh = seededShuffle(freshGenreFiltered, seed);
     const remaining = seededShuffle(
       genreFiltered.filter((c) => recentExcludes.has(c.id)),
       seed + 1
     );
-    candidates = [...fresh, ...remaining].slice(0, finalN);
+    candidates = [...fresh, ...remaining].slice(0, FIXED_N);
   } else {
-    // Not enough genre-matched; fill from broader TBR
-    const genreMatched = seededShuffle(genreFiltered, seed);
-    const genreMatchedIds = new Set(genreMatched.map((c) => c.id));
-    const broader = seededShuffle(
-      (freshAll.length > 0 ? freshAll : allTbr).filter((c) => !genreMatchedIds.has(c.id)),
-      seed + 2
-    );
-    candidates = [...genreMatched, ...broader].slice(0, finalN);
+    // Not enough genre-matched books — return what we have (strict: NO off-genre fills)
+    candidates = seededShuffle(genreFiltered, seed);
+  }
+
+  const finalN = candidates.length; // will be <= FIXED_N
+
+  // Build a friendly message if fewer than 3 match
+  let genreLimitedMessage: string | null = null;
+  if (strictGenreMode && genreFiltered.length < FIXED_N) {
+    genreLimitedMessage = `Only ${genreFiltered.length} book${genreFiltered.length === 1 ? '' : 's'} match${genreFiltered.length === 1 ? 'es' : ''} your selected genre${selectedGenres.length > 1 ? 's' : ''}—try adding another genre for more options.`;
   }
 
   // ── Check Anthropic key ──
@@ -279,7 +277,7 @@ serve(async (req) => {
     provider_attempted: "none",
     model_attempted: null,
     candidate_count: candidates.length,
-    tbr_total: tbrTotal,
+    tbr_total: allTbr.length,
     target_n: finalN,
     seed,
     exclude_count: recentExcludes.size,
@@ -293,8 +291,9 @@ serve(async (req) => {
     await persistRecommendations(supabase as any, user.id, recs);
     return json({
       recommendations: recs, llm_used: false, provider: "recommendation_engine", model: null,
-      is_tbr_strict: true, tbr_total: tbrTotal, target_n: finalN,
+      is_tbr_strict: true, tbr_total: allTbr.length, target_n: finalN,
       warnings: [],
+      ...(genreLimitedMessage ? { genre_limited_message: genreLimitedMessage } : {}),
       ...(debugInfo ? { debug: debugInfo } : {}),
     });
   }
@@ -424,9 +423,10 @@ serve(async (req) => {
     provider: llmSuccess ? "anthropic" : "recommendation_engine",
     model: llmSuccess ? anthropicModel : null,
     is_tbr_strict: true,
-    tbr_total: tbrTotal,
+    tbr_total: allTbr.length,
     target_n: finalN,
     warnings: [],
+    ...(genreLimitedMessage ? { genre_limited_message: genreLimitedMessage } : {}),
     ...(debugInfo ? { debug: debugInfo } : {}),
   });
 });
