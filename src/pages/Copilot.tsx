@@ -19,7 +19,7 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer";
-import { Slider } from "@/components/ui/slider";
+
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -284,10 +284,9 @@ const computeFeedbackWeights = (entries: FeedbackEntry[]): FeedbackWeights => {
   return weights;
 };
 
-const scoreFallback = (catalog: Recommendation[], books: LibraryBook[], feedback: FeedbackWeights, promptTags: string[], surprise: number) => {
+const scoreFallback = (catalog: Recommendation[], books: LibraryBook[], feedback: FeedbackWeights, promptTags: string[]) => {
   const profile = buildProfile(books);
   const excluded = new Set(books.map((book) => normalize(book.title)));
-  const surpriseBoost = Math.max(0, Math.min(100, surprise)) / 100;
   return catalog
     .filter((book) => !excluded.has(normalize(book.title)))
     .map((book) => {
@@ -297,15 +296,14 @@ const scoreFallback = (catalog: Recommendation[], books: LibraryBook[], feedback
       const authorWeight = profile.topAuthors.find((e) => e.key === authorKey)?.value ?? 0;
       const feedbackBoost = (feedback.genres[genreKey] ?? 0) + (feedback.authors[authorKey] ?? 0);
       const moodBoost = book.tags.filter((tag) => promptTags.includes(tag)).length * 1.5;
-      const diversityPenalty = profile.topGenres.some((e) => e.key === genreKey) ? (1 - surpriseBoost) * 1.5 : 0;
       const avoidPenalty =
         (profile.avoidGenres.some((e) => e.key === genreKey) ? 2 : 0) +
         (profile.avoidAuthors.some((e) => e.key === authorKey) ? 2 : 0);
-      const score = genreWeight * 0.7 + authorWeight * 1.2 + feedbackBoost * 0.6 + moodBoost + Math.random() * 0.2 - diversityPenalty - avoidPenalty;
+      const score = genreWeight * 0.7 + authorWeight * 1.2 + feedbackBoost * 0.6 + moodBoost + Math.random() * 0.2 - avoidPenalty;
       return { book, score, reasons: ["A steady fallback pick based on your library.", "Matches the mood signals you provided."], why_new: "A balanced option outside your current shelf." };
     })
     .sort((a, b) => b.score - a.score)
-    .slice(0, 4)
+    .slice(0, 3)
     .map((entry) => ({ ...entry.book, reasons: entry.reasons, why_new: entry.why_new }));
 };
 
@@ -315,7 +313,7 @@ const Copilot = () => {
   const [loadingLibrary, setLoadingLibrary] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [surprise, setSurprise] = useState(35);
+  
   const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntry[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
@@ -468,11 +466,14 @@ const Copilot = () => {
         genre: r.genre || "General",
         tags: r.tags || [],
         summary: (r.reasons || []).join(". "),
-        source: r.source || "claude",
+        source: r.source || "recommendation_engine",
         reasons: r.reasons || [],
         why_new: "From your TBR list",
       }));
       setRecommendations(mapped);
+      if (data.genre_limited_message) {
+        setStatusMessage(data.genre_limited_message);
+      }
       await loadHistory(userId);
     } catch (e) {
       console.error("[ShelfGuide] TBR recommendation error:", e);
@@ -503,7 +504,7 @@ const Copilot = () => {
             fallbackGenres: tasteSummary.fallbackGenres.map((g) => g.key),
           };
       const { data, error } = await supabase.functions.invoke("reading-copilot", {
-        body: { prompt, tags: promptTags, surprise, limit: 4, taste: tastePayload },
+        body: { prompt, tags: promptTags, limit: 3, taste: tastePayload },
       });
       if (error || !data) {
         // Never expose AI backend details — use local fallback silently
@@ -517,19 +518,23 @@ const Copilot = () => {
           // Silent fallback — no error message shown
           setStatusMessage(null);
         }
-        setRecommendations(scoreFallback(FALLBACK_CATALOG, books, feedbackWeights, promptTags, surprise));
+        setRecommendations(scoreFallback(FALLBACK_CATALOG, books, feedbackWeights, promptTags));
         setLoadingRecommendations(false);
         return;
       }
       // Never surface internal warnings to user
       setStatusMessage(null);
-      setRecommendations((data.recommendations || []) as Recommendation[]);
+      const recs = (data.recommendations || []) as Recommendation[];
+      setRecommendations(recs);
+      if (data.genre_limited_message) {
+        setStatusMessage(data.genre_limited_message);
+      }
       await loadHistory(userId);
       setLoadingRecommendations(false);
       return;
     }
-    setStatusMessage("Sign in for AI-powered recommendations. Showing curated picks.");
-    setRecommendations(scoreFallback(FALLBACK_CATALOG, books, feedbackWeights, promptTags, surprise));
+    setStatusMessage("Sign in for personalized recommendations. Showing curated picks.");
+    setRecommendations(scoreFallback(FALLBACK_CATALOG, books, feedbackWeights, promptTags));
     setHistoryEntries([]);
     setLoadingRecommendations(false);
   };
@@ -644,11 +649,6 @@ const Copilot = () => {
                   </Button>
                 );
               })}
-            </div>
-            <div className="grid gap-3">
-              <div className="flex items-center justify-between text-sm text-muted-foreground"><span>Diversity control</span><span>{surprise}% surprise</span></div>
-              <Slider value={[surprise]} min={0} max={100} step={5} onValueChange={(v) => setSurprise(v[0] ?? 35)} />
-              <p className="text-xs text-muted-foreground">Slide right for more unexpected picks.</p>
             </div>
             <div className="flex flex-wrap gap-3">
               <Button onClick={fetchRecommendations} disabled={loadingRecommendations}><Sparkles className="w-4 h-4 mr-2" />{loadingRecommendations ? "Thinking..." : "Generate picks"}</Button>
