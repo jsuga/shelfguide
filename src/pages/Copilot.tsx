@@ -502,27 +502,23 @@ const Copilot = () => {
         body: { prompt, tags: promptTags, surprise, limit: 4, taste: tastePayload },
       });
       if (error || !data) {
-        // Classify the error for a helpful message
-        let reason = "Service temporarily unavailable. Showing curated picks.";
+        // Never expose AI backend details — use local fallback silently
         if (!navigator.onLine) {
-          reason = "No internet connection. Showing curated picks.";
+          setStatusMessage("No internet connection. Showing curated picks.");
         } else if (error?.message?.includes("401") || error?.message?.includes("403")) {
-          reason = "Session expired. Please sign in again.";
+          setStatusMessage("Session expired. Please sign in again.");
         } else if (error?.message?.includes("429")) {
-          reason = "Too many requests. Try again in a moment.";
+          setStatusMessage("Too many requests. Try again in a moment.");
+        } else {
+          // Silent fallback — no error message shown
+          setStatusMessage(null);
         }
-        if (import.meta.env.DEV) console.warn("[ShelfGuide] Copilot edge function error:", error);
-        setStatusMessage(reason);
         setRecommendations(scoreFallback(FALLBACK_CATALOG, books, feedbackWeights, promptTags, surprise));
         setLoadingRecommendations(false);
         return;
       }
-      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
-        // Never show internal warnings to user; show graceful fallback note
-        const w = data.warnings[0] || "";
-        const isInternal = /no ai|heuristic|matched candidates|anthropic|key missing/i.test(w);
-        setStatusMessage(isInternal ? "Using curated picks while we tune the AI." : w);
-      }
+      // Never surface internal warnings to user
+      setStatusMessage(null);
       setRecommendations((data.recommendations || []) as Recommendation[]);
       await loadHistory(userId);
       setLoadingRecommendations(false);

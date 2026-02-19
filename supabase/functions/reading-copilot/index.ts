@@ -481,8 +481,7 @@ serve(async (req) => {
       recommendations: fallback, llm_used: false, source: "curated",
       provider: "curated", model: null,
       warnings: [],
-      error: { code: "MISSING_ANTHROPIC_KEY", message: "No AI API key configured. Please add ANTHROPIC_API_KEY." },
-      ...(debugInfo ? { debug: debugInfo } : {}),
+      ...(debugInfo ? { debug: { ...debugInfo, internal_error: "MISSING_ANTHROPIC_KEY" } } : {}),
     });
   }
 
@@ -602,9 +601,8 @@ serve(async (req) => {
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
       provider: "curated", model: null,
-      warnings: ["AI service temporarily unavailable. Showing curated picks."],
-      error: { code: llmError?.includes("RATE_LIMIT") ? "ANTHROPIC_RATE_LIMIT" : "LLM_UNAVAILABLE", message: llmError || "All LLM providers failed after retries." },
-      ...(debugInfo ? { debug: debugInfo } : {}),
+      warnings: [],
+      ...(debugInfo ? { debug: { ...debugInfo, internal_error: llmError || "All LLM providers failed after retries." } } : {}),
     });
   }
 
@@ -639,9 +637,8 @@ serve(async (req) => {
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
       provider: "curated", model: modelUsed,
-      warnings: ["AI response could not be parsed. Showing curated picks."],
-      error: { code: "LLM_PARSE_ERROR", message: "Could not parse structured response from AI." },
-      ...(debugInfo ? { debug: debugInfo } : {}),
+      warnings: [],
+      ...(debugInfo ? { debug: { ...debugInfo, internal_error: "LLM_PARSE_ERROR" } } : {}),
     });
   }
 
@@ -668,9 +665,8 @@ serve(async (req) => {
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
       provider: "curated", model: modelUsed,
-      warnings: ["AI picks didn't match available books. Showing curated picks."],
-      error: { code: "LLM_NO_MATCH", message: "AI candidate IDs did not match search results." },
-      ...(debugInfo ? { debug: debugInfo } : {}),
+      warnings: [],
+      ...(debugInfo ? { debug: { ...debugInfo, internal_error: "LLM_NO_MATCH" } } : {}),
     });
   }
 
