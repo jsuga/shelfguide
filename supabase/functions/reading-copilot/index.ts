@@ -74,6 +74,26 @@ const getClientIp = (req: Request) => {
   return req.headers.get("x-real-ip") || req.headers.get("cf-connecting-ip") || null;
 };
 
+// ─── Seeded shuffle (Fisher-Yates with simple seed RNG) ─────────────────────
+
+const seededRng = (seed: number) => {
+  let s = seed;
+  return () => {
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    return (s >>> 0) / 0xffffffff;
+  };
+};
+
+const seededShuffle = <T>(arr: T[], seed: number): T[] => {
+  const a = [...arr];
+  const rng = seededRng(seed);
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
 // ─── Rate limiting ───────────────────────────────────────────────────────────
 
 const checkRateLimit = async (params: {
@@ -204,21 +224,14 @@ const fetchOpenLibrary = async (query: string, limit = 18) => {
 // ─── JSON parsing (hardened for Claude output) ───────────────────────────────
 
 const extractJson = (text: string): any => {
-  // 1. Direct parse
   try { return JSON.parse(text.trim()); } catch { /* continue */ }
-
-  // 2. Strip markdown fences
   const stripped = text.replace(/```(?:json)?\s*/gi, "").replace(/```\s*/g, "").trim();
   try { return JSON.parse(stripped); } catch { /* continue */ }
-
-  // 3. Extract first { ... } substring
   const start = stripped.indexOf("{");
   const end = stripped.lastIndexOf("}");
   if (start !== -1 && end > start) {
     try { return JSON.parse(stripped.slice(start, end + 1)); } catch { /* continue */ }
   }
-
-  // 4. Try extracting [ ... ] (array)
   const aStart = stripped.indexOf("[");
   const aEnd = stripped.lastIndexOf("]");
   if (aStart !== -1 && aEnd > aStart) {
@@ -227,16 +240,17 @@ const extractJson = (text: string): any => {
       if (Array.isArray(arr)) return { recommendations: arr };
     } catch { /* continue */ }
   }
-
   return null;
 };
 
 // ─── Curated fallback builder ────────────────────────────────────────────────
 
-const buildFallback = (candidates: Candidate[], reasons: string[]): Recommendation[] =>
-  candidates.slice(0, 4).map((c) => ({
+const buildFallback = (candidates: Candidate[], reasons: string[], seed: number): Recommendation[] => {
+  const shuffled = seededShuffle(candidates, seed);
+  return shuffled.slice(0, 4).map((c) => ({
     ...c, reasons: reasons.slice(0, 2), why_new: "A fresh pick that might surprise you.",
   }));
+};
 
 const STATIC_CURATED: Recommendation[] = [
   { id: "curated-1", title: "The House in the Cerulean Sea", author: "TJ Klune", genre: "Fantasy", tags: ["cozy", "fantasy", "found family"], summary: "A heartwarming fantasy about finding family in unexpected places.", source: "Curated", reasons: ["Beloved cozy fantasy", "Uplifting and heartfelt"], why_new: "A warm hug of a book loved by readers worldwide." },
@@ -244,6 +258,29 @@ const STATIC_CURATED: Recommendation[] = [
   { id: "curated-3", title: "The Thursday Murder Club", author: "Richard Osman", genre: "Mystery", tags: ["cozy mystery", "humor", "british"], summary: "Four retirees meet weekly to investigate cold cases—until a real murder happens.", source: "Curated", reasons: ["Charming cozy mystery", "Laugh-out-loud funny"], why_new: "Proof that the best detectives are over seventy." },
   { id: "curated-4", title: "Circe", author: "Madeline Miller", genre: "Fantasy", tags: ["mythology", "literary fiction", "feminist"], summary: "The mythological sorceress Circe tells her own epic story of power and transformation.", source: "Curated", reasons: ["Stunning mythological retelling", "Powerful and lyrical"], why_new: "Ancient myth reimagined with breathtaking prose." },
 ];
+
+// ─── Fetch recent recommendation IDs to exclude ─────────────────────────────
+
+const getRecentExcludes = async (
+  client: ReturnType<typeof createClient>,
+  userId: string,
+  _requestType: string,
+): Promise<Set<string>> => {
+  try {
+    const { data } = await (client as any)
+      .from("copilot_recommendations")
+      .select("book_id")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(20); // last ~2 batches worth of IDs
+    if (data && data.length > 0) {
+      return new Set(data.map((r: any) => r.book_id).filter(Boolean));
+    }
+  } catch (e) {
+    console.warn("[reading-copilot] Failed to fetch recent excludes:", e);
+  }
+  return new Set();
+};
 
 // ─── Fetch curated from DB, fallback to static ──────────────────────────────
 
@@ -253,7 +290,6 @@ const fetchCuratedFromDb = async (
   limit = 5
 ): Promise<Recommendation[]> => {
   try {
-    // Get popular recommendations from other users (service role bypasses RLS)
     const { data } = await (client as any)
       .from("copilot_recommendations")
       .select("book_id,title,author,genre,tags,summary,source,reasons,why_new")
@@ -375,6 +411,9 @@ serve(async (req) => {
 
   const { prompt = "", tags = [], surprise = 35, limit: reqLimit = 4 } = body as any;
 
+  // ── Generate a unique seed for this request ──
+  const seed = Date.now() ^ (Math.random() * 0xffffffff);
+
   // ── Rate limiting ──
   const ip = getClientIp(req);
   const rateLimitClient = serviceClient || supabase;
@@ -389,12 +428,13 @@ serve(async (req) => {
     return json({ error: "Rate limit exceeded. Please try again later.", retry_after: rateResult.retryAfter }, 429);
   }
 
-  // ── Fetch user data ──
-  const [booksRes, prefsRes, feedbackRes] = await Promise.all([
+  // ── Fetch user data + recent excludes ──
+  const [booksRes, prefsRes, feedbackRes, recentExcludes] = await Promise.all([
     (supabase as any).from("books").select("*").eq("user_id", user.id),
     (supabase as any).from("copilot_preferences").select("*").eq("user_id", user.id).maybeSingle(),
     (supabase as any).from("copilot_feedback").select("book_id,title,author,genre,tags,decision")
       .eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
+    getRecentExcludes(supabase, user.id, "generate_picks"),
   ]);
 
   const books = (booksRes.data || []) as LibraryBook[];
@@ -430,21 +470,24 @@ serve(async (req) => {
     candidateMap.set(mapKey, c);
   });
 
-  const candidates = Array.from(candidateMap.values()).slice(0, 12);
+  // Apply exclude list: prefer candidates not recently shown
+  const allCandidates = Array.from(candidateMap.values());
+  const freshCandidates = allCandidates.filter((c) => !recentExcludes.has(c.id));
+  // Use fresh candidates if enough, otherwise fall back to all
+  const candidates = (freshCandidates.length >= 4 ? freshCandidates : allCandidates).slice(0, 12);
+  // Shuffle with seed for variety
+  const shuffledCandidates = seededShuffle(candidates, seed);
 
   // ── Helper: get curated fallback (DB then static) ──
   const getCuratedFallback = async (): Promise<Recommendation[]> => {
-    // First try from candidates
-    if (candidates.length > 0) {
-      return buildFallback(candidates, ["Matches your library's vibe.", "A popular reader favorite."]);
+    if (shuffledCandidates.length > 0) {
+      return buildFallback(shuffledCandidates, ["Matches your library's vibe.", "A popular reader favorite."], seed);
     }
-    // Then try DB
     if (serviceClient) {
       const dbCurated = await fetchCuratedFromDb(serviceClient, user.id, 5);
-      if (dbCurated.length > 0) return dbCurated;
+      if (dbCurated.length > 0) return seededShuffle(dbCurated, seed).slice(0, 4);
     }
-    // Static fallback
-    return STATIC_CURATED.slice(0, 4);
+    return seededShuffle(STATIC_CURATED, seed).slice(0, 4);
   };
 
   // ── LLM flow ──
@@ -458,7 +501,9 @@ serve(async (req) => {
     parse_attempts: [] as string[],
     curated_count: 0,
     anthropic_status: null,
-    candidate_count: candidates.length,
+    candidate_count: shuffledCandidates.length,
+    seed,
+    exclude_count: recentExcludes.size,
   } : null;
 
   if (!llmEnabled) {
@@ -467,8 +512,7 @@ serve(async (req) => {
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
-      provider: "curated", model: null,
-      warnings: ["LLM is disabled by configuration. Showing curated picks."],
+      provider: "curated", model: null, warnings: [],
       ...(debugInfo ? { debug: debugInfo } : {}),
     });
   }
@@ -479,8 +523,7 @@ serve(async (req) => {
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
-      provider: "curated", model: null,
-      warnings: [],
+      provider: "curated", model: null, warnings: [],
       ...(debugInfo ? { debug: { ...debugInfo, internal_error: "MISSING_ANTHROPIC_KEY" } } : {}),
     });
   }
@@ -489,6 +532,7 @@ serve(async (req) => {
   const accepted = feedback.filter((e) => e.decision === "accepted").slice(0, 4);
   const rejected = feedback.filter((e) => e.decision === "rejected").slice(0, 4);
 
+  const excludeIds = Array.from(recentExcludes).slice(0, 10);
   const systemPrompt = [
     "You are a ShelfGuide copilot that recommends books.",
     "You MUST select from the candidates list provided. Do not invent books.",
@@ -498,22 +542,23 @@ serve(async (req) => {
     "Each reason must be max 12 words. Give exactly 2 reasons per book.",
     "why_new must be a short personable sentence, max 18 words.",
     "",
+    "IMPORTANT: Provide a DIFFERENT mix each time. Include at least 2 new authors or subgenres compared to typical picks.",
+    excludeIds.length > 0 ? `Do NOT recommend these IDs (recently shown): ${excludeIds.join(", ")}` : "",
+    "",
     "Required JSON schema:",
     "{\"recommendations\": [{\"id\": \"string\", \"reasons\": [\"string\", \"string\"], \"why_new\": \"string\"}]}",
-    "",
-    "Example valid response:",
-    "{\"recommendations\": [{\"id\": \"abc123\", \"reasons\": [\"Perfect cozy read for winter\", \"Beloved by fantasy fans\"], \"why_new\": \"A fresh take that will surprise you.\"}]}",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 
   const userPrompt = JSON.stringify({
-    prompt: compact(prompt), surprise,
+    prompt: compact(prompt), surprise, seed,
     diversity_rule: surprise >= 70 ? "Include at least one recommendation outside the top genres."
       : surprise <= 30 ? "Prefer recommendations aligned with top genres."
       : "Balance familiar and fresh picks.",
+    variation_hint: "Provide a different mix than last time.",
     preferences,
     atmosphere: preferences.atmosphere || "cozy",
     profile, accepted, rejected,
-    candidates: candidates.map((c) => ({
+    candidates: shuffledCandidates.map((c) => ({
       id: c.id, title: c.title, author: c.author, genre: c.genre,
       tags: c.tags.slice(0, 6), summary: c.summary.slice(0, 240), source: c.source,
     })),
@@ -537,7 +582,7 @@ serve(async (req) => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: anthropicModel, max_tokens: 800, temperature: 0.7,
+          model: anthropicModel, max_tokens: 800, temperature: 0.85,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],
         }),
@@ -570,7 +615,7 @@ serve(async (req) => {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${lovableApiKey}` },
         body: JSON.stringify({
-          model: gatewayModel, max_tokens: 800, temperature: 0.7,
+          model: gatewayModel, max_tokens: 800, temperature: 0.85,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -600,8 +645,7 @@ serve(async (req) => {
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
-      provider: "curated", model: null,
-      warnings: [],
+      provider: "curated", model: null, warnings: [],
       ...(debugInfo ? { debug: { ...debugInfo, internal_error: llmError || "All LLM providers failed after retries." } } : {}),
     });
   }
@@ -610,14 +654,11 @@ serve(async (req) => {
   const llmPayload = await llmResponse.json();
   let textBlock = "";
 
-  // Anthropic format: { content: [{ type: "text", text: "..." }] }
   if (Array.isArray(llmPayload.content)) {
     textBlock = llmPayload.content
       .map((part: any) => (asRecord(part).text ? String(asRecord(part).text) : ""))
       .join("\n");
-  }
-  // OpenAI-compatible format: { choices: [{ message: { content: "..." } }] }
-  else if (llmPayload.choices && Array.isArray(llmPayload.choices)) {
+  } else if (llmPayload.choices && Array.isArray(llmPayload.choices)) {
     textBlock = llmPayload.choices[0]?.message?.content || "";
   }
 
@@ -636,8 +677,7 @@ serve(async (req) => {
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
-      provider: "curated", model: modelUsed,
-      warnings: [],
+      provider: "curated", model: modelUsed, warnings: [],
       ...(debugInfo ? { debug: { ...debugInfo, internal_error: "LLM_PARSE_ERROR" } } : {}),
     });
   }
@@ -646,7 +686,7 @@ serve(async (req) => {
   const recs = parsed.recommendations
     .map((rec: any) => {
       const r = asRecord(rec);
-      const match = candidates.find((c) => c.id === r.id);
+      const match = shuffledCandidates.find((c) => c.id === r.id);
       if (!match) return null;
       return {
         ...match,
@@ -664,8 +704,7 @@ serve(async (req) => {
     await persistHistory(supabase, user.id, fallback);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
-      provider: "curated", model: modelUsed,
-      warnings: [],
+      provider: "curated", model: modelUsed, warnings: [],
       ...(debugInfo ? { debug: { ...debugInfo, internal_error: "LLM_NO_MATCH" } } : {}),
     });
   }
@@ -673,8 +712,7 @@ serve(async (req) => {
   await persistHistory(supabase, user.id, recs);
   return json({
     recommendations: recs, llm_used: true, source: "llm",
-    provider: providerUsed, model: modelUsed,
-    warnings: [],
+    provider: providerUsed, model: modelUsed, warnings: [],
     ...(debugInfo ? { debug: debugInfo } : {}),
   });
 });
