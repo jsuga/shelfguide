@@ -319,15 +319,26 @@ const fetchCuratedFromDb = async (
 // ─── Persist history ─────────────────────────────────────────────────────────
 
 const persistHistory = async (
-  client: ReturnType<typeof createClient>, userId: string, recommendations: Recommendation[]
-) => {
-  if (!recommendations.length) return;
+  client: ReturnType<typeof createClient>, userId: string, recommendations: Recommendation[], requestId = ""
+): Promise<boolean> => {
+  if (!recommendations.length) return true;
   const payload = recommendations.map((rec) => ({
     user_id: userId, book_id: rec.id, title: rec.title, author: rec.author,
     genre: rec.genre, tags: rec.tags || [], summary: rec.summary, source: rec.source,
     reasons: rec.reasons || [], why_new: rec.why_new,
   }));
-  await (client as any).from("copilot_recommendations").insert(payload);
+  try {
+    const { error } = await (client as any).from("copilot_recommendations").insert(payload);
+    if (error) {
+      console.error(`[reading-copilot] request_id=${requestId} db_write_error:`, error.message);
+      return false;
+    }
+    console.log(`[reading-copilot] request_id=${requestId} db_write_success count=${recommendations.length}`);
+    return true;
+  } catch (e) {
+    console.error(`[reading-copilot] request_id=${requestId} db_write_error:`, e);
+    return false;
+  }
 };
 
 // ─── Fetch with exponential backoff ──────────────────────────────────────────
@@ -367,6 +378,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
+  const requestId = crypto.randomUUID();
   const body = await req.json().catch(() => ({} as any));
   const debugMode = Boolean((body as any).debug);
 
@@ -375,7 +387,7 @@ serve(async (req) => {
     const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
     const lovableKey = Deno.env.get("LOVABLE_API_KEY") ?? "";
     return json({
-      ok: true, function: "reading-copilot",
+      ok: true, function: "reading-copilot", request_id: requestId,
       env_present: {
         SUPABASE_URL: Boolean(Deno.env.get("SUPABASE_URL")),
         SUPABASE_ANON_KEY: Boolean(Deno.env.get("SUPABASE_ANON_KEY")),
@@ -410,6 +422,8 @@ serve(async (req) => {
   const serviceClient = serviceKey ? createClient(supabaseUrl, serviceKey) : null;
 
   const { prompt = "", tags = [], limit: reqLimit = 3 } = body as any;
+
+  console.log(`[reading-copilot] START request_id=${requestId} user_id=${user.id} request_type=generate_picks`);
 
   // ── Generate a unique seed for this request ──
   const seed = Date.now() ^ (Math.random() * 0xffffffff);
@@ -509,7 +523,7 @@ serve(async (req) => {
   if (!llmEnabled) {
     const fallback = await getCuratedFallback();
     if (debugInfo) debugInfo.curated_count = fallback.length;
-    await persistHistory(supabase, user.id, fallback);
+    await persistHistory(supabase, user.id, fallback, requestId);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
       provider: "curated", model: null, warnings: [],
@@ -520,7 +534,7 @@ serve(async (req) => {
   if (!anthropicKey && !lovableApiKey) {
     const fallback = await getCuratedFallback();
     if (debugInfo) debugInfo.curated_count = fallback.length;
-    await persistHistory(supabase, user.id, fallback);
+    await persistHistory(supabase, user.id, fallback, requestId);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
       provider: "curated", model: null, warnings: [],
@@ -639,7 +653,7 @@ serve(async (req) => {
   if (!llmResponse) {
     const fallback = await getCuratedFallback();
     if (debugInfo) debugInfo.curated_count = fallback.length;
-    await persistHistory(supabase, user.id, fallback);
+    await persistHistory(supabase, user.id, fallback, requestId);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
       provider: "curated", model: null, warnings: [],
@@ -671,7 +685,7 @@ serve(async (req) => {
     console.warn("[reading-copilot] Failed to parse LLM JSON. Raw:", textBlock.slice(0, 500));
     const fallback = await getCuratedFallback();
     if (debugInfo) debugInfo.curated_count = fallback.length;
-    await persistHistory(supabase, user.id, fallback);
+    await persistHistory(supabase, user.id, fallback, requestId);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
       provider: "curated", model: modelUsed, warnings: [],
@@ -698,7 +712,7 @@ serve(async (req) => {
     console.warn("[reading-copilot] AI returned IDs that didn't match candidates. Falling back.");
     const fallback = await getCuratedFallback();
     if (debugInfo) debugInfo.curated_count = fallback.length;
-    await persistHistory(supabase, user.id, fallback);
+    await persistHistory(supabase, user.id, fallback, requestId);
     return json({
       recommendations: fallback, llm_used: false, source: "curated",
       provider: "curated", model: modelUsed, warnings: [],
@@ -706,7 +720,7 @@ serve(async (req) => {
     });
   }
 
-  await persistHistory(supabase, user.id, recs);
+  await persistHistory(supabase, user.id, recs, requestId);
   return json({
     recommendations: recs, llm_used: true, source: "llm",
     provider: providerUsed, model: modelUsed, warnings: [],
