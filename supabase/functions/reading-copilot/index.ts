@@ -261,25 +261,33 @@ const STATIC_CURATED: Recommendation[] = [
 
 // ─── Fetch recent recommendation IDs to exclude ─────────────────────────────
 
+// Returns both ID-based and title+author-based exclude sets for stable matching
 const getRecentExcludes = async (
   client: ReturnType<typeof createClient>,
   userId: string,
   _requestType: string,
-): Promise<Set<string>> => {
+): Promise<{ ids: Set<string>; titleKeys: Set<string> }> => {
   try {
     const { data } = await (client as any)
       .from("copilot_recommendations")
-      .select("book_id")
+      .select("book_id,title,author")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
-      .limit(20); // last ~2 batches worth of IDs
+      .limit(12); // last ~4 batches for strong rotation
     if (data && data.length > 0) {
-      return new Set(data.map((r: any) => r.book_id).filter(Boolean));
+      return {
+        ids: new Set(data.map((r: any) => r.book_id).filter(Boolean)),
+        titleKeys: new Set(data.map((r: any) => {
+          const t = (r.title || "").trim().toLowerCase();
+          const a = (r.author || "").trim().toLowerCase();
+          return `${t}::${a}`;
+        }).filter((k: string) => k !== "::")),
+      };
     }
   } catch (e) {
     console.warn("[reading-copilot] Failed to fetch recent excludes:", e);
   }
-  return new Set();
+  return { ids: new Set(), titleKeys: new Set() };
 };
 
 // ─── Fetch curated from DB, fallback to static ──────────────────────────────
@@ -425,8 +433,10 @@ serve(async (req) => {
 
   console.log(`[reading-copilot] START request_id=${requestId} user_id=${user.id} request_type=generate_picks`);
 
-  // ── Generate a unique seed for this request ──
-  const seed = Date.now() ^ (Math.random() * 0xffffffff);
+  // ── Generate a cryptographically unique seed for this request ──
+  const seedArr = new Uint32Array(1);
+  crypto.getRandomValues(seedArr);
+  const seed = seedArr[0];
 
   // ── Rate limiting ──
   const ip = getClientIp(req);
@@ -443,13 +453,14 @@ serve(async (req) => {
   }
 
   // ── Fetch user data + recent excludes ──
-  const [booksRes, prefsRes, feedbackRes, recentExcludes] = await Promise.all([
+  const [booksRes, prefsRes, feedbackRes, recentExcludeData] = await Promise.all([
     (supabase as any).from("books").select("*").eq("user_id", user.id),
     (supabase as any).from("copilot_preferences").select("*").eq("user_id", user.id).maybeSingle(),
     (supabase as any).from("copilot_feedback").select("book_id,title,author,genre,tags,decision")
       .eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
     getRecentExcludes(supabase, user.id, "generate_picks"),
   ]);
+  const recentExcludes = recentExcludeData;
 
   const books = (booksRes.data || []) as LibraryBook[];
   const preferences = (prefsRes.data || {
@@ -484,13 +495,19 @@ serve(async (req) => {
     candidateMap.set(mapKey, c);
   });
 
-  // Apply exclude list: prefer candidates not recently shown
+  // Apply exclude list: prefer candidates not recently shown (use title+author for stable matching)
   const allCandidates = Array.from(candidateMap.values());
-  const freshCandidates = allCandidates.filter((c) => !recentExcludes.has(c.id));
+  const isFresh = (c: Candidate) => {
+    const titleKey = `${normalize(c.title)}::${normalize(c.author)}`;
+    return !recentExcludes.ids.has(c.id) && !recentExcludes.titleKeys.has(titleKey);
+  };
+  const freshCandidates = allCandidates.filter(isFresh);
   // Use fresh candidates if enough, otherwise fall back to all
   const candidates = (freshCandidates.length >= 3 ? freshCandidates : allCandidates).slice(0, 12);
-  // Shuffle with seed for variety
+  // Shuffle with crypto seed for variety
   const shuffledCandidates = seededShuffle(candidates, seed);
+
+  console.log(`[reading-copilot] request_id=${requestId} candidate_count=${allCandidates.length} fresh_count=${freshCandidates.length} exclude_ids=${recentExcludes.ids.size} exclude_titles=${recentExcludes.titleKeys.size}`);
 
   // ── Helper: get curated fallback (DB then static) ──
   const getCuratedFallback = async (): Promise<Recommendation[]> => {
@@ -517,7 +534,7 @@ serve(async (req) => {
     anthropic_status: null,
     candidate_count: shuffledCandidates.length,
     seed,
-    exclude_count: recentExcludes.size,
+    exclude_count: recentExcludes.ids.size + recentExcludes.titleKeys.size,
   } : null;
 
   if (!llmEnabled) {
@@ -546,7 +563,7 @@ serve(async (req) => {
   const accepted = feedback.filter((e) => e.decision === "accepted").slice(0, 4);
   const rejected = feedback.filter((e) => e.decision === "rejected").slice(0, 4);
 
-  const excludeIds = Array.from(recentExcludes).slice(0, 10);
+  const excludeIds = Array.from(recentExcludes.ids).slice(0, 10);
   const systemPrompt = [
     "You are a ShelfGuide copilot that recommends books.",
     "You MUST select from the candidates list provided. Do not invent books.",
