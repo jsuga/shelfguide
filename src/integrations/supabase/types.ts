@@ -167,6 +167,7 @@ export type Database = {
           preferred_formats: string[] | null
           preferred_genres: string[] | null
           preferred_pace: string | null
+          rotation_state: Json | null
           ui_theme: string | null
           updated_at: string | null
           user_id: string
@@ -179,6 +180,7 @@ export type Database = {
           preferred_formats?: string[] | null
           preferred_genres?: string[] | null
           preferred_pace?: string | null
+          rotation_state?: Json | null
           ui_theme?: string | null
           updated_at?: string | null
           user_id: string
@@ -191,6 +193,7 @@ export type Database = {
           preferred_formats?: string[] | null
           preferred_genres?: string[] | null
           preferred_pace?: string | null
+          rotation_state?: Json | null
           ui_theme?: string | null
           updated_at?: string | null
           user_id?: string
