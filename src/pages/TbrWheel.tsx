@@ -290,7 +290,7 @@ const TbrWheel = () => {
   const renderWheel = (wcx: number, wcy: number, wr: number, large: boolean) => {
     const innerR = wr * 0.22; // donut hole
     return (
-      <div className="relative mx-auto mt-2" style={{ width: wcx * 2, height: wcy * 2 }}>
+      <div className="relative mx-auto mt-2 max-w-[90vw] max-h-[60vh]" style={{ width: wcx * 2, height: wcy * 2, aspectRatio: "1/1" }}>
         {/* Pointer at top */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1 z-10">
           <div className={`w-0 h-0 border-l-transparent border-r-transparent border-t-primary ${large ? "border-l-[14px] border-r-[14px] border-t-[24px]" : "border-l-[10px] border-r-[10px] border-t-[18px]"}`} />
@@ -357,6 +357,7 @@ const TbrWheel = () => {
     );
   };
 
+  // Responsive wheel sizes
   const cx = 150, cy = 150, r = 140;
   const fsCx = 220, fsCy = 220, fsR = 210;
 
@@ -369,7 +370,9 @@ const TbrWheel = () => {
           <X className="w-6 h-6" />
         </Button>
         <h2 className="font-display text-2xl font-bold mb-4">Spin your TBR</h2>
-        {renderWheel(fsCx, fsCy, fsR, true)}
+        <div className="w-full max-w-[min(440px,90vw)] mx-auto">
+          {renderWheel(fsCx, fsCy, fsR, true)}
+        </div>
         {/* Only show result AFTER spin animation ends */}
         {winner && !spinning && (
           <div className="mt-6 text-center animate-in fade-in-0 zoom-in-95 duration-300">
@@ -505,8 +508,10 @@ const TbrWheel = () => {
                     <Button onClick={spin} disabled={spinning || wheelBooks.length === 0}><RotateCw className="w-4 h-4 mr-2" />{spinning ? "Spinning..." : "Spin"}</Button>
                   </div>
 
-                  {/* Inline SVG Wheel (small preview) */}
-                  {renderWheel(cx, cy, r, false)}
+                  {/* Inline SVG Wheel (small preview) — responsive container */}
+                  <div className="w-full max-w-[min(300px,90vw)] mx-auto">
+                    {renderWheel(cx, cy, r, false)}
+                  </div>
 
                   {filtered.length > WHEEL_MAX && (
                     <div className="mt-3 flex items-center justify-between gap-3">
