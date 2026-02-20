@@ -290,12 +290,12 @@ const TbrWheel = () => {
   const renderWheel = (wcx: number, wcy: number, wr: number, large: boolean) => {
     const innerR = wr * 0.22; // donut hole
     return (
-      <div className="relative mx-auto mt-2 max-w-[90vw] max-h-[60vh]" style={{ width: wcx * 2, height: wcy * 2, aspectRatio: "1/1" }}>
+      <div className="relative mx-auto mt-2 w-full" style={{ maxWidth: wcx * 2, aspectRatio: "1/1" }}>
         {/* Pointer at top */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1 z-10">
           <div className={`w-0 h-0 border-l-transparent border-r-transparent border-t-primary ${large ? "border-l-[14px] border-r-[14px] border-t-[24px]" : "border-l-[10px] border-r-[10px] border-t-[18px]"}`} />
         </div>
-        <svg width={wcx * 2} height={wcy * 2} viewBox={`0 0 ${wcx * 2} ${wcy * 2}`}
+        <svg viewBox={`0 0 ${wcx * 2} ${wcy * 2}`} className="w-full h-full"
           style={{ transform: `rotate(${rotation}deg)`, transition: spinning ? `transform ${spinDuration}ms cubic-bezier(0.17, 0.67, 0.12, 0.99)` : 'none' }}>
           {wheelBooks.map((book, i) => {
             const anglePer = 360 / wheelBooks.length;
@@ -370,7 +370,7 @@ const TbrWheel = () => {
           <X className="w-6 h-6" />
         </Button>
         <h2 className="font-display text-2xl font-bold mb-4">Spin your TBR</h2>
-        <div className="w-full max-w-[min(440px,90vw)] mx-auto">
+        <div className="w-full max-w-[min(440px,92vw)] max-h-[55vh] mx-auto flex items-center justify-center">
           {renderWheel(fsCx, fsCy, fsR, true)}
         </div>
         {/* Only show result AFTER spin animation ends */}
@@ -509,7 +509,7 @@ const TbrWheel = () => {
                   </div>
 
                   {/* Inline SVG Wheel (small preview) — responsive container */}
-                  <div className="w-full max-w-[min(300px,90vw)] mx-auto">
+                  <div className="w-full max-w-[min(300px,92vw)] mx-auto">
                     {renderWheel(cx, cy, r, false)}
                   </div>
 
