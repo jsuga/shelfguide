@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookMarked, Search } from "lucide-react";
+import { BookMarked } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import StarRating from "@/components/StarRating";
+import SearchInput from "@/components/SearchInput";
 import StatusSelector from "@/components/StatusSelector";
 import BookCard from "@/components/books/BookCard";
 import BookGrid from "@/components/books/BookGrid";
@@ -992,7 +993,7 @@ const Library = () => {
 
   return (
     <main className="container mx-auto px-4 pt-24 pb-16">
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
         <div>
           <h1 className="font-display text-4xl font-bold">My Library</h1>
           <p className="text-muted-foreground mt-2 font-body">
@@ -1004,95 +1005,96 @@ const Library = () => {
             </Button>
           </div>
         </div>
-        <div className="flex flex-col items-end gap-2">
-          {/* Removed duplicate sign-out - sign out lives in the navbar only */}
+        <div className="flex flex-row sm:flex-col items-center sm:items-end gap-2 flex-wrap">
           {userLabel && (
-            <div className="flex items-center gap-3 text-xs text-muted-foreground font-body">
-              <span>Signed in as {userLabel}</span>
-            </div>
+            <span className="text-xs text-muted-foreground font-body order-first sm:order-none">
+              Signed in as {userLabel}
+            </span>
           )}
-          <Dialog open={addBookDialogOpen} onOpenChange={setAddBookDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>Add Book</Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl border border-border/60 bg-card/95 p-0">
-              <div className="rounded-2xl overflow-hidden">
-                <div className="px-8 py-6 bg-secondary/40 border-b border-border/60">
-                  <DialogHeader>
-                    <DialogTitle className="font-display text-2xl">
-                      Library Card
-                    </DialogTitle>
-                  </DialogHeader>
-                  <p className="text-sm text-muted-foreground font-body mt-2">
-                    Fill in the card to add another book to your library.
-                  </p>
-                </div>
+          <div className="flex items-center gap-2">
+            <Dialog open={addBookDialogOpen} onOpenChange={setAddBookDialogOpen}>
+              <DialogTrigger asChild>
+                <Button>Add Book</Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl border border-border/60 bg-card/95 p-0">
+                <div className="rounded-2xl overflow-hidden">
+                  <div className="px-8 py-6 bg-secondary/40 border-b border-border/60">
+                    <DialogHeader>
+                      <DialogTitle className="font-display text-2xl">
+                        Library Card
+                      </DialogTitle>
+                    </DialogHeader>
+                    <p className="text-sm text-muted-foreground font-body mt-2">
+                      Fill in the card to add another book to your library.
+                    </p>
+                  </div>
 
-                <div className="px-8 py-6 grid gap-5">
-                  <div className="grid gap-2">
-                    <Label htmlFor="book-title">Title <span className="text-destructive">*</span></Label>
-                    <Input id="book-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="The Name of the Wind" />
+                  <div className="px-8 py-6 grid gap-5">
+                    <div className="grid gap-2">
+                      <Label htmlFor="book-title">Title <span className="text-destructive">*</span></Label>
+                      <Input id="book-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="The Name of the Wind" />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="book-author">Author <span className="text-destructive">*</span></Label>
+                      <Input id="book-author" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Patrick Rothfuss" />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="book-genre">Genre</Label>
+                      <Input id="book-genre" value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="Fantasy" />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="book-series">Series Name</Label>
+                      <Input id="book-series" value={seriesName} onChange={(e) => setSeriesName(e.target.value)} placeholder="The Kingkiller Chronicle" />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Checkbox id="book-first" checked={isFirstInSeries} onCheckedChange={(checked) => setIsFirstInSeries(checked === true)} />
+                      <Label htmlFor="book-first">Is first in series</Label>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Status</Label>
+                      <Select value={status} onValueChange={setStatus}>
+                        <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="tbr">TBR</SelectItem>
+                          <SelectItem value="reading">Reading</SelectItem>
+                          <SelectItem value="finished">Finished</SelectItem>
+                          <SelectItem value="paused">Paused</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center justify-end gap-3">
+                      <Button variant="outline" onClick={() => setAddBookDialogOpen(false)}>Cancel</Button>
+                      <Button onClick={handleAddBook} disabled={addingBook || !userId}>
+                        {addingBook ? "Adding..." : "Add Book"}
+                      </Button>
+                    </div>
+                    {!userId && (
+                      <p className="text-xs text-muted-foreground text-center">Sign in to add books.</p>
+                    )}
                   </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="book-author">Author <span className="text-destructive">*</span></Label>
-                    <Input id="book-author" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Patrick Rothfuss" />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="book-genre">Genre</Label>
-                    <Input id="book-genre" value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="Fantasy" />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="book-series">Series Name</Label>
-                    <Input id="book-series" value={seriesName} onChange={(e) => setSeriesName(e.target.value)} placeholder="The Kingkiller Chronicle" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Checkbox id="book-first" checked={isFirstInSeries} onCheckedChange={(checked) => setIsFirstInSeries(checked === true)} />
-                    <Label htmlFor="book-first">Is first in series</Label>
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>Status</Label>
-                    <Select value={status} onValueChange={setStatus}>
-                      <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="tbr">TBR</SelectItem>
-                        <SelectItem value="reading">Reading</SelectItem>
-                        <SelectItem value="finished">Finished</SelectItem>
-                        <SelectItem value="paused">Paused</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="flex items-center justify-end gap-3">
-                    <Button variant="outline" onClick={() => setAddBookDialogOpen(false)}>Cancel</Button>
-                    <Button onClick={handleAddBook} disabled={addingBook || !userId}>
-                      {addingBook ? "Adding..." : "Add Book"}
-                    </Button>
-                  </div>
-                  {!userId && (
-                    <p className="text-xs text-muted-foreground text-center">Sign in to add books.</p>
-                  )}
                 </div>
-              </div>
-            </DialogContent>
-          </Dialog>
-          <input
-            ref={csvInputRef}
-            type="file"
-            accept=".csv"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void handleCsvImport(file);
-              e.target.value = "";
-            }}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-xs px-3 h-8"
-            onClick={() => csvInputRef.current?.click()}
-          >
-            Import Library
-          </Button>
+              </DialogContent>
+            </Dialog>
+            <input
+              ref={csvInputRef}
+              type="file"
+              accept=".csv"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleCsvImport(file);
+                e.target.value = "";
+              }}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs px-3 h-8"
+              onClick={() => csvInputRef.current?.click()}
+            >
+              Import Library
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -1134,15 +1136,12 @@ const Library = () => {
       {/* Search + Sort controls */}
       {books.length > 0 && (
         <div className="mb-6 flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by title, author, series, or genre..."
-              className="pl-10"
-            />
-          </div>
+          <SearchInput
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Search by title, author, series, or genre..."
+            className="flex-1"
+          />
           <Select value={sortMode} onValueChange={(v) => setSortMode(v as SortMode)}>
             <SelectTrigger className="w-full sm:w-56">
               <SelectValue placeholder="Sort by..." />

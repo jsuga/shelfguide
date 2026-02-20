@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import BookCard from "@/components/books/BookCard";
 import BookGrid from "@/components/books/BookGrid";
+import SearchInput from "@/components/SearchInput";
 import { supabase } from "@/integrations/supabase/client";
 import type { ProfileRow } from "@/lib/profiles";
 import { canAccessPublicLibrary } from "@/lib/profilePrivacy";
@@ -28,6 +29,7 @@ const PublicProfile = () => {
   const [loading, setLoading] = useState(true);
   const [privateMessage, setPrivateMessage] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     const loadPage = async () => {
@@ -92,6 +94,18 @@ const PublicProfile = () => {
     return `${profile.display_name || profile.username}'s Library`;
   }, [profile]);
 
+  const handleSearchChange = useCallback((val: string) => setSearchQuery(val), []);
+
+  const filteredBooks = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return books;
+    return books.filter(
+      (b) =>
+        b.title.toLowerCase().includes(q) ||
+        b.author.toLowerCase().includes(q)
+    );
+  }, [books, searchQuery]);
+
   if (loading) {
     return (
       <main className="container mx-auto px-4 pt-24 pb-16">
@@ -138,15 +152,29 @@ const PublicProfile = () => {
       </div>
 
       <div className="max-w-6xl">
-        {books.length === 0 ? (
+        {books.length > 0 && (
+          <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            <SearchInput
+              value={searchQuery}
+              onChange={handleSearchChange}
+              placeholder="Search this library by title or author…"
+              className="flex-1 max-w-md"
+            />
+            <span className="text-xs text-muted-foreground shrink-0">
+              Showing {filteredBooks.length} of {books.length}
+            </span>
+          </div>
+        )}
+
+        {filteredBooks.length === 0 ? (
           <Card className="border-border/60 bg-card/70">
             <CardContent className="p-6 text-sm text-muted-foreground">
-              No books shared yet.
+              {searchQuery ? "No books match your search." : "No books shared yet."}
             </CardContent>
           </Card>
         ) : (
           <BookGrid>
-            {books.map((book) => (
+            {filteredBooks.map((book) => (
               <BookCard
                 key={book.id}
                 book={book}

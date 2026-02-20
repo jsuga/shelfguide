@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import SearchInput from "@/components/SearchInput";
 import { supabase } from "@/integrations/supabase/client";
 import type { ProfileRow } from "@/lib/profiles";
 import { isProfileDiscoverable } from "@/lib/profilePrivacy";
@@ -17,7 +17,7 @@ const Community = () => {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setDebouncedQuery(query.trim());
-    }, 300);
+    }, 250);
     return () => window.clearTimeout(timer);
   }, [query]);
 
@@ -44,6 +44,8 @@ const Community = () => {
     void runSearch();
   }, [debouncedQuery]);
 
+  const handleQueryChange = useCallback((val: string) => setQuery(val), []);
+
   const emptyMessage = useMemo(() => {
     if (loading) return "Searching public profiles...";
     if (debouncedQuery) return "No public profiles matched your search.";
@@ -60,14 +62,14 @@ const Community = () => {
       </div>
 
       <div className="max-w-3xl">
-        <Input
+        <SearchInput
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search by username or display name"
+          onChange={handleQueryChange}
+          placeholder="Search by username…"
         />
       </div>
 
-      <div className="mt-6 grid gap-4 max-w-4xl">
+      <div className="mt-6 grid gap-3 max-w-4xl">
         {profiles.length === 0 ? (
           <Card className="border-border/60 bg-card/70">
             <CardContent className="p-6 text-sm text-muted-foreground">
@@ -77,23 +79,23 @@ const Community = () => {
         ) : (
           profiles.map((profile) => (
             <Card key={profile.user_id} className="border-border/60 bg-card/70">
-              <CardContent className="p-4 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3 min-w-0">
-                  <Avatar>
-                    <AvatarFallback>
+              <CardContent className="p-3 sm:p-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Avatar className="h-8 w-8 sm:h-10 sm:w-10 shrink-0">
+                    <AvatarFallback className="text-xs sm:text-sm">
                       {(profile.display_name || profile.username).slice(0, 2).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
                   <div className="min-w-0">
-                    <div className="font-medium truncate">
+                    <div className="font-medium truncate text-sm sm:text-base leading-tight">
                       {profile.display_name || profile.username}
                     </div>
-                    <div className="text-xs text-muted-foreground truncate">
+                    <div className="text-[11px] sm:text-xs text-muted-foreground truncate">
                       @{profile.username}
                     </div>
                   </div>
                 </div>
-                <Button asChild variant="outline" size="sm">
+                <Button asChild variant="outline" size="sm" className="shrink-0 text-xs sm:text-sm h-8 sm:h-9">
                   <Link to={`/u/${profile.username}`}>View library</Link>
                 </Button>
               </CardContent>
