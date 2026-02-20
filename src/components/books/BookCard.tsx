@@ -50,9 +50,9 @@ const BookCard = ({
   const showCoverFallback = !resolvedCover || coverFailed;
 
   return (
-    <div className="rounded-xl border border-border/60 bg-card/70 p-4 shadow-sm">
-      <div className="flex gap-3">
-        <div className="flex-shrink-0 w-16 aspect-[2/3] rounded-md overflow-hidden bg-secondary/40 flex items-center justify-center relative">
+    <div className="rounded-xl border border-border/60 bg-card/70 p-3 sm:p-4 shadow-sm max-w-[92vw] mx-auto">
+      <div className="flex gap-2.5 sm:gap-3">
+        <div className="flex-shrink-0 w-[52px] sm:w-16 aspect-[2/3] rounded-md overflow-hidden bg-secondary/40 flex items-center justify-center relative">
           {resolvedCover && !showCoverFallback ? (
             <img
               src={resolvedCover}
@@ -84,8 +84,8 @@ const BookCard = ({
             <div className="flex items-center gap-2">{statusNode}</div>
             <div className="flex items-center gap-1">{actionsNode}</div>
           </div>
-          <h3 className="font-display text-lg font-bold mt-1 truncate">{book.title}</h3>
-          <p className="text-sm text-muted-foreground font-body truncate">{book.author}</p>
+          <h3 className="font-display text-base sm:text-lg font-bold mt-1 line-clamp-2">{book.title}</h3>
+          <p className="text-xs sm:text-sm text-muted-foreground font-body truncate">{book.author}</p>
           {ratingNode && <div className="mt-2">{ratingNode}</div>}
           {badgesNode && (
             <div className="text-xs text-muted-foreground font-body mt-2 flex flex-wrap gap-1">
