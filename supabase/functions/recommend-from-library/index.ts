@@ -118,7 +118,7 @@ const getRecentExcludes = async (
       .select("book_id")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
-      .limit(6); // last ~2 batches of 3
+      .limit(12); // last ~4 batches of 3 for strong rotation
     if (data && data.length > 0) {
       return new Set(data.map((r: any) => r.book_id).filter(Boolean));
     }
@@ -182,8 +182,10 @@ serve(async (req) => {
   const selectedGenres: string[] = Array.isArray(body.genres) ? body.genres : [];
   const moodText: string = typeof body.mood === "string" ? body.mood : "";
 
-  // ── Generate a unique seed for this request ──
-  const seed = Date.now() ^ (Math.random() * 0xffffffff);
+  // ── Generate a cryptographically unique seed for this request ──
+  const seedArr = new Uint32Array(1);
+  crypto.getRandomValues(seedArr);
+  const seed = seedArr[0];
 
   console.log(`[recommend-from-library] START request_id=${requestId} genres=${JSON.stringify(selectedGenres)} mood=${moodText.slice(0, 50)}`);
 
