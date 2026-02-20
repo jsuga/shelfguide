@@ -187,70 +187,163 @@ const scoreBook = (
   return score;
 };
 
-// ─── Why Reasons Generator (varied phrasing) ────────────────────────────────
+// ─── Evidence-based Why Builder ──────────────────────────────────────────────
 
-const whyTemplates = {
-  genre: [
-    (g: string) => `Matches your selected genre: ${g}`,
-    (g: string) => `Right in your ${g} wheelhouse`,
-    (g: string) => `A strong ${g} pick for you`,
-  ],
-  mood: [
-    (m: string) => `Fits your '${m}' mood`,
-    (m: string) => `Great match for a ${m} reading session`,
-    (m: string) => `Perfectly suited to your ${m} vibe`,
-  ],
-  author: [
-    (a: string) => `You often read ${a} — this is a solid next pick`,
-    (a: string) => `From ${a}, one of your favorite authors`,
-    (a: string) => `By ${a}, who you've enjoyed before`,
-  ],
-  series: [
-    (s: string) => `Continue the ${s} series`,
-    (s: string) => `Next in the ${s} saga you've been reading`,
-  ],
-  general: [
-    "A fresh pick from your library",
-    "Waiting on your shelf — give it a try",
-    "One of the hidden gems in your collection",
-    "A title that deserves your attention",
-    "Highly rated in your library",
-  ],
+type WhyContext = {
+  selectedGenres: string[];
+  moodText: string;
+  moodKeywords: string[];
+  authorCounts: Record<string, number>;
+  allBooks: LibraryBook[];
 };
 
-const pickTemplate = <T>(arr: T[], seed: number): T => arr[Math.abs(seed) % arr.length];
-
-const generateReasons = (
+/** Build candidate bullets for a single book, ordered by priority. */
+const buildCandidateBullets = (
   book: LibraryBook,
-  selectedGenres: string[],
-  moodText: string,
-  authorCounts: Record<string, number>,
-  seed: number,
+  ctx: WhyContext,
+  bookIndex: number,
 ): string[] => {
-  const reasons: string[] = [];
+  const bullets: string[] = [];
+  const genre = book.genre || "";
 
-  if (selectedGenres.length > 0 && book.genre) {
-    reasons.push(pickTemplate(whyTemplates.genre, seed)(book.genre));
+  // 1) Genre match (highest priority when genres selected)
+  if (ctx.selectedGenres.length > 0 && genre) {
+    const variants = [
+      `Matches your selected genre: ${genre}`,
+      `Sits right in the ${genre} category you chose`,
+      `Exactly the ${genre} pick you're looking for`,
+    ];
+    bullets.push(variants[bookIndex % variants.length]);
   }
 
-  if (moodText) {
-    reasons.push(pickTemplate(whyTemplates.mood, seed + 1)(moodText.slice(0, 30)));
+  // 2) Mood match (grounded in what we actually know)
+  if (ctx.moodText && ctx.moodKeywords.length > 0) {
+    const searchable = `${book.title} ${genre} ${book.description || ""} ${(book.tags || []).join(" ")} ${book.series_name || ""}`.toLowerCase();
+    const matched = ctx.moodKeywords.filter(kw => searchable.includes(kw));
+
+    if (matched.length > 0) {
+      const variants = [
+        `Fits your '${ctx.moodText.slice(0, 30)}' mood — its ${genre || "style"} aligns with keywords like "${matched.slice(0, 2).join(", ")}"`,
+        `Great match for your "${ctx.moodText.slice(0, 30)}" request — ${matched[0]} vibes come through in its ${genre || "style"}`,
+      ];
+      bullets.push(variants[bookIndex % variants.length]);
+    } else if (genre) {
+      // Conservative fallback: mood + genre mapping
+      bullets.push(`You asked for '${ctx.moodText.slice(0, 25)}' — ${genre} titles tend to deliver that feel`);
+    }
   }
 
+  // 3) Author affinity
   const authorKey = normalize(book.author);
-  if ((authorCounts[authorKey] ?? 0) >= 2) {
-    reasons.push(pickTemplate(whyTemplates.author, seed + 2)(book.author));
+  const authorFreq = ctx.authorCounts[authorKey] ?? 0;
+  if (authorFreq >= 3) {
+    const variants = [
+      `You have ${authorFreq} books by ${book.author} — clearly a favorite`,
+      `${book.author} is one of your most-read authors with ${authorFreq} titles in your library`,
+      `A reliable pick from ${book.author}, who you've collected ${authorFreq} books from`,
+    ];
+    bullets.push(variants[bookIndex % variants.length]);
+  } else if (authorFreq === 2) {
+    const variants = [
+      `You've enjoyed ${book.author} before — this continues that streak`,
+      `Another title from ${book.author}, whose work you already own`,
+    ];
+    bullets.push(variants[bookIndex % variants.length]);
   }
 
-  if (book.series_name && reasons.length < 3) {
-    reasons.push(pickTemplate(whyTemplates.series, seed + 3)(book.series_name));
+  // 4) Series continuity (only if grounded)
+  if (book.series_name && !book.is_first_in_series) {
+    const hasOthersInSeries = ctx.allBooks.some(
+      b => b.id !== book.id && b.series_name === book.series_name
+    );
+    if (hasOthersInSeries) {
+      bullets.push(`Continues the ${book.series_name} series you've been reading`);
+    }
   }
 
-  while (reasons.length < 2) {
-    reasons.push(pickTemplate(whyTemplates.general, seed + reasons.length));
+  // 5) TBR motivation
+  const status = normalize(book.status || "tbr");
+  if (status === "tbr" || status === "want_to_read") {
+    const variants = [
+      "Already on your TBR — a low-friction next read",
+      "Sitting in your to-be-read pile, ready to go",
+      "You added this to your TBR for a reason — now's the time",
+    ];
+    bullets.push(variants[bookIndex % variants.length]);
   }
 
-  return reasons.slice(0, 3);
+  // 6) Page count insight (only if we have data)
+  if (typeof book.page_count === "number" && book.page_count > 0) {
+    if (book.page_count < 250) {
+      bullets.push(`A quick read at ${book.page_count} pages — easy to finish`);
+    } else if (book.page_count > 500) {
+      bullets.push(`An immersive ${book.page_count}-page read for when you want to go deep`);
+    }
+  }
+
+  // 7) Novelty / rotation bullet
+  const variants = [
+    `Fresh pick to break up your reading pattern${genre ? ` within ${genre}` : ""}`,
+    `Rotated in for variety${genre ? ` — a different angle on ${genre}` : ""}`,
+    `Something different from your recent recommendations${genre ? ` while staying in ${genre}` : ""}`,
+  ];
+  bullets.push(variants[bookIndex % variants.length]);
+
+  return bullets;
+};
+
+/**
+ * Build deduplicated why bullets for all selected books.
+ * Returns a Map of bookId → string[] (exactly 3 bullets each, or 2 if data is scarce).
+ */
+const buildAllWhyBullets = (
+  books: LibraryBook[],
+  ctx: WhyContext,
+): Map<string, string[]> => {
+  const usedPhrases = new Set<string>();
+  const result = new Map<string, string[]>();
+  let seriesUsed = false;
+
+  for (let i = 0; i < books.length; i++) {
+    const book = books[i];
+    const candidates = buildCandidateBullets(book, ctx, i);
+    const chosen: string[] = [];
+
+    for (const bullet of candidates) {
+      if (chosen.length >= 3) break;
+
+      const key = bullet.trim().toLowerCase();
+      if (usedPhrases.has(key)) continue;
+
+      // Series bullet: max once per response
+      const isSeries = bullet.includes("series") && (bullet.includes("Continues") || bullet.includes("Next"));
+      if (isSeries && seriesUsed) continue;
+
+      chosen.push(bullet);
+      usedPhrases.add(key);
+      if (isSeries) seriesUsed = true;
+    }
+
+    // Ensure minimum 2 bullets
+    if (chosen.length < 2) {
+      const fallbacks = [
+        `A standout title in your collection worth revisiting`,
+        `Hand-picked from your library based on your reading history`,
+      ];
+      for (const fb of fallbacks) {
+        if (chosen.length >= 2) break;
+        const key = fb.toLowerCase();
+        if (!usedPhrases.has(key)) {
+          chosen.push(fb);
+          usedPhrases.add(key);
+        }
+      }
+    }
+
+    result.set(book.id, chosen.slice(0, 3));
+  }
+
+  return result;
 };
 
 // ─── Persist history ─────────────────────────────────────────────────────────
@@ -501,25 +594,26 @@ serve(async (req) => {
   // Limit to top ~40% for quality when pool is large
   // (Already handled by scored ranking — cursor walks top-scored first)
 
-  // ── Generate seed for varied "why" phrasing ──
-  const seedArr = new Uint32Array(1);
-  crypto.getRandomValues(seedArr);
-  const phrasingSeed = seedArr[0];
+
+  // ── Build why bullets (evidence-based, deduplicated) ──
+  const whyCtx: WhyContext = { selectedGenres, moodText: promptText, moodKeywords, authorCounts, allBooks };
+  const whyMap = buildAllWhyBullets(selected, whyCtx);
 
   // ── Build recommendations ──
-  const recs: Recommendation[] = selected.map((book, i) => ({
-    id: book.id,
-    title: book.title,
-    author: book.author,
-    genre: book.genre || "General",
-    tags: [],
-    summary: generateReasons(book, selectedGenres, promptText, authorCounts, phrasingSeed + i).join(". "),
-    source: "recommendation_engine",
-    reasons: generateReasons(book, selectedGenres, promptText, authorCounts, phrasingSeed + i),
-    why_new: book.series_name
-      ? `Next up in ${book.series_name} — dive back in`
-      : `A great pick waiting in your library`,
-  }));
+  const recs: Recommendation[] = selected.map((book) => {
+    const bullets = whyMap.get(book.id) || [];
+    return {
+      id: book.id,
+      title: book.title,
+      author: book.author,
+      genre: book.genre || "General",
+      tags: [],
+      summary: bullets.join(". "),
+      source: "recommendation_engine",
+      reasons: bullets,
+      why_new: bullets[0] || "A strong pick from your library",
+    };
+  });
 
   // ── Update rotation state ──
   const updatedCtx: RotationContext = {
