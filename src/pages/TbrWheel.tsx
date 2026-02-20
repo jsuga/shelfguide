@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Sparkles, RotateCw, BookOpen, X, Check } from "lucide-react";
+import { RotateCw, BookOpen, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -12,11 +12,9 @@ import {
   flushAllPendingSync,
   getAuthenticatedUserId,
   retryAsync,
-  upsertBooksToCloud,
 } from "@/lib/cloudSync";
 import {
   applyTbrFilters,
-  dedupeCandidatesAgainstOwned,
   getDistinctGenres,
   pickWinnerIndex,
   sampleForWheel,
@@ -24,7 +22,6 @@ import {
   type TbrFilters,
   TBR_WHEEL_GENRES,
   type TbrFirstInSeriesFilter,
-  type TbrOwnershipMode,
 } from "@/lib/tbrWheel";
 
 const db = supabase as any;
@@ -52,39 +49,10 @@ const setLocalBooks = (books: LibraryBook[]) => { localStorage.setItem(LIBRARY_K
 
 const defaultFilters: TbrFilters = { genres: ["Any"], firstInSeries: "any", ownership: "library", length: "Any" };
 
-type CopilotRecommendation = { id: string; title: string; author: string; genre: string };
+
 const normalize = (value: string) => value.trim().toLowerCase();
 
 const getSelectedGenres = (filters: TbrFilters) => filters.genres.filter((g) => g !== "Any");
-
-const buildCopilotPrompts = (filters: TbrFilters) => {
-  const selectedGenres = getSelectedGenres(filters);
-  const genrePrompt = selectedGenres.length > 0 ? `genres: ${selectedGenres.join(", ")}` : "genres: broad mix";
-  const firstPrompt = filters.firstInSeries === "first_only" ? "prefer first books in series" : filters.firstInSeries === "not_first" ? "prefer standalones or not-first-in-series books" : "series position: any";
-  return [
-    `tbr recommendations, ${genrePrompt}, ${firstPrompt}`,
-    `reader wants new picks, ${genrePrompt}, ${firstPrompt}`,
-    `recommend outside owned library, ${genrePrompt}, ${firstPrompt}`,
-    `discoverable books for reading next, ${genrePrompt}, ${firstPrompt}`,
-  ];
-};
-
-const parseGoogleBook = (payload: unknown) => {
-  const data = payload as { items?: Array<{ volumeInfo?: { categories?: string[]; pageCount?: number; imageLinks?: { thumbnail?: string }; industryIdentifiers?: Array<{ type?: string; identifier?: string }> } }> };
-  const first = data?.items?.[0]?.volumeInfo;
-  if (!first) return null;
-  const identifiers = first.industryIdentifiers || [];
-  const isbn13 = identifiers.find((e) => normalize(e.type || "") === "isbn_13")?.identifier || null;
-  const isbn = identifiers.find((e) => normalize(e.type || "") === "isbn_10")?.identifier || null;
-  return { categories: first.categories || [], page_count: first.pageCount ?? null, thumbnail: first.imageLinks?.thumbnail || null, isbn, isbn13 };
-};
-
-const enrichFromGoogleBooks = async (book: CopilotRecommendation) => {
-  const query = `intitle:${book.title} inauthor:${book.author}`;
-  const url = new URL("https://www.googleapis.com/books/v1/volumes");
-  url.searchParams.set("q", query); url.searchParams.set("maxResults", "1"); url.searchParams.set("printType", "books"); url.searchParams.set("langRestrict", "en");
-  try { const res = await fetch(url.toString()); if (!res.ok) return null; return parseGoogleBook(await res.json()); } catch { return null; }
-};
 
 // SVG Wheel helpers
 const generateSliceColors = (count: number): string[] => {
@@ -125,8 +93,7 @@ const TbrWheel = () => {
   const [userId, setUserId] = useState<string | null>(null);
   const [filters, setFilters] = useState<TbrFilters>(defaultFilters);
   const [appliedFilters, setAppliedFilters] = useState<TbrFilters>(defaultFilters);
-  const [externalCandidates, setExternalCandidates] = useState<LibraryBook[]>([]);
-  const [loadingExternal, setLoadingExternal] = useState(false);
+  const [externalCandidates] = useState<LibraryBook[]>([]);
   const [sampleNonce, setSampleNonce] = useState(0);
   const [wheelBooks, setWheelBooks] = useState<LibraryBook[]>([]);
   const [rotation, setRotation] = useState(0);
@@ -185,9 +152,8 @@ const TbrWheel = () => {
   }, []);
 
   const sourceBooks = useMemo(() => {
-    if (appliedFilters.ownership === "library") return books.filter((b) => normalize(b.status || "") === "tbr" || normalize(b.status || "") === "want_to_read" || normalize(b.status || "") === "to-read");
-    return externalCandidates;
-  }, [appliedFilters.ownership, books, externalCandidates]);
+    return books.filter((b) => normalize(b.status || "") === "tbr" || normalize(b.status || "") === "want_to_read" || normalize(b.status || "") === "to-read");
+  }, [books]);
 
   const filtered = useMemo(() => applyTbrFilters(sourceBooks, appliedFilters), [sourceBooks, appliedFilters]);
   const displayed = useMemo(() => { void sampleNonce; return sampleForWheel(filtered, WHEEL_MAX); }, [filtered, sampleNonce]);
@@ -195,30 +161,9 @@ const TbrWheel = () => {
 
   const refreshSample = () => { setSampleNonce((v) => v + 1); setWinner(null); setRotation(0); };
 
-  const loadExternalCandidates = async (nextFilters: TbrFilters) => {
-    if (!userId) { setExternalCandidates([]); toast.error("Sign in to get recommendations outside your library."); return; }
-    setLoadingExternal(true);
-    const prompts = buildCopilotPrompts(nextFilters);
-    const results = await Promise.all(prompts.map(async (prompt) => {
-      const { data, error } = await supabase.functions.invoke("reading-copilot", { body: { prompt, tags: getSelectedGenres(nextFilters).map((g) => normalize(g)), surprise: 55, limit: 6 } });
-      if (error) return [] as CopilotRecommendation[];
-      return (data?.recommendations || []) as CopilotRecommendation[];
-    }));
-    const flat = results.flat();
-    if (flat.length === 0) { setExternalCandidates([]); setLoadingExternal(false); toast.error("Could not load recommendation candidates from Copilot."); return; }
-    const enriched = await Promise.all(flat.map(async (c) => {
-      const meta = await enrichFromGoogleBooks(c);
-      return { id: c.id, title: c.title, author: c.author, genre: meta?.categories?.[0] || c.genre || null, status: "tbr", is_first_in_series: false, series_name: null, page_count: meta?.page_count ?? null, thumbnail: meta?.thumbnail || null, isbn: meta?.isbn || null, isbn13: meta?.isbn13 || null, source: "copilot_recommendation" } as LibraryBook;
-    }));
-    const deduped = dedupeCandidatesAgainstOwned(enriched, books);
-    setExternalCandidates(deduped); setLoadingExternal(false);
-    if (deduped.length === 0) toast.error("No non-owned recommendations matched your filters.");
-  };
-
-  const applyFilters = async () => {
-    const next = { ...filters, length: filters.ownership === "library" ? "Any" as const : filters.length };
+  const applyFilters = () => {
+    const next = { ...filters, ownership: "library" as const, length: "Any" as const };
     setAppliedFilters(next);
-    if (next.ownership === "not_owned") await loadExternalCandidates(next);
     setWinner(null); setRotation(0); setSampleNonce((v) => v + 1);
   };
 
@@ -240,20 +185,6 @@ const TbrWheel = () => {
       });
     });
     setTimeout(() => { setWinner(wheelBooks[winnerIndex] ?? null); setSpinning(false); }, 3400);
-  };
-
-  const addWinnerToLibrary = async () => {
-    if (!winner) return;
-    const payload = { title: winner.title, author: winner.author, genre: winner.genre || "", series_name: winner.series_name || null, is_first_in_series: winner.is_first_in_series === true, status: "tbr", page_count: winner.page_count ?? null, thumbnail: winner.thumbnail || null, isbn: winner.isbn || null, isbn13: winner.isbn13 || null, source: winner.source || "tbr_wheel" };
-    if (userId) {
-      const { error } = await upsertBooksToCloud(userId, [payload]);
-      if (error) { enqueueLibrarySync(userId, [payload], "tbr_wheel_add"); setCloudNotice("TBR add queued for cloud sync."); return; }
-      await loadBooks(userId);
-      setExternalCandidates((cur) => cur.filter((e) => !(normalize(e.title) === normalize(winner.title) && normalize(e.author) === normalize(winner.author))));
-      toast.success("Added to your library as TBR."); return;
-    }
-    const nextBooks = [{ ...payload }, ...books]; setBooks(nextBooks); setLocalBooks(nextBooks);
-    toast.success("Added to your local library as TBR.");
   };
 
   const startReading = async () => {
@@ -379,11 +310,7 @@ const TbrWheel = () => {
             <h3 className="font-display text-xl font-bold">{winner.title}</h3>
             <p className="text-sm text-muted-foreground">{winner.author}</p>
             <div className="mt-3 flex gap-2 justify-center flex-wrap">
-              {appliedFilters.ownership === "library" ? (
-                <Button size="sm" onClick={startReading}>Start Reading</Button>
-              ) : (
-                <Button size="sm" onClick={addWinnerToLibrary}>Add to Library (TBR)</Button>
-              )}
+              <Button size="sm" onClick={startReading}>Start Reading</Button>
               <Button size="sm" variant="outline" onClick={() => { setWinner(null); spin(); }}>Spin again</Button>
               <Button size="sm" variant="ghost" onClick={() => setFullScreenSpin(false)}>Close</Button>
             </div>
@@ -448,34 +375,8 @@ const TbrWheel = () => {
               </Select>
             </div>
 
-            <div className="grid gap-2">
-              <label className="text-sm font-medium">Ownership</label>
-              <Select value={filters.ownership} onValueChange={(v) => setFilters((p) => ({ ...p, ownership: v as TbrOwnershipMode, length: v === "library" ? "Any" : p.length }))}>
-                <SelectTrigger><SelectValue placeholder="Select ownership mode" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="library">In my library</SelectItem>
-                  <SelectItem value="not_owned">Not owned / recommend outside my library</SelectItem>
-                </SelectContent>
-              </Select>
-              {filters.ownership === "not_owned" && <div className="text-xs text-muted-foreground">In-library mode always spins from your TBR books.</div>}
-            </div>
 
-            {filters.ownership !== "library" && (
-              <div className="grid gap-2">
-                <label className="text-sm font-medium">Length</label>
-                <Select value={filters.length} onValueChange={(v) => setFilters((p) => ({ ...p, length: v as TbrFilters["length"] }))}>
-                  <SelectTrigger><SelectValue placeholder="Select length" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Any">Any</SelectItem>
-                    <SelectItem value="<250">&lt;250 pages</SelectItem>
-                    <SelectItem value="250-400">250-400 pages</SelectItem>
-                    <SelectItem value="400+">400+ pages</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            <Button onClick={() => void applyFilters()} disabled={loadingExternal}>{loadingExternal ? "Loading candidates..." : "Apply filters"}</Button>
+            <Button onClick={() => void applyFilters()}>Apply filters</Button>
             <div className="text-sm text-muted-foreground">
               Matching books: <strong>{filtered.length}</strong>
               {wheelBooks.length > 0 && wheelBooks.length < filtered.length && (
@@ -486,12 +387,7 @@ const TbrWheel = () => {
         </section>
 
         <section className="grid gap-4">
-          {loadingExternal ? (
-            <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-8 text-center">
-              <h3 className="font-display text-xl font-bold mb-2">Building your candidate wheel</h3>
-              <p className="text-sm text-muted-foreground font-body mb-4">Generating non-owned recommendations and enriching metadata.</p>
-            </div>
-          ) : filtered.length === 0 ? (
+          {filtered.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-8 text-center">
               <h3 className="font-display text-xl font-bold mb-2">No matches yet</h3>
               <p className="text-sm text-muted-foreground font-body mb-4">Try loosening your filters or add more TBR books.</p>
@@ -536,11 +432,7 @@ const TbrWheel = () => {
                         <h3 className="font-display text-xl font-bold">{winner.title}</h3>
                         <p className="text-sm text-muted-foreground">{winner.author}</p>
                         <div className="mt-3 flex flex-wrap gap-2">
-                          {appliedFilters.ownership === "library" ? (
-                            <Button size="sm" onClick={startReading}>Start Reading</Button>
-                          ) : (
-                            <Button size="sm" onClick={addWinnerToLibrary}>Add to Library (TBR)</Button>
-                          )}
+                          <Button size="sm" onClick={startReading}>Start Reading</Button>
                           <Button size="sm" variant="outline" onClick={spin}>Spin again</Button>
                           <Button size="sm" variant="ghost" onClick={saveToHistory}>Save to Recently Recommended</Button>
                         </div>

@@ -118,7 +118,7 @@ const getRecentExcludes = async (
       .select("book_id")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
-      .limit(30);
+      .limit(6); // last ~2 batches of 3
     if (data && data.length > 0) {
       return new Set(data.map((r: any) => r.book_id).filter(Boolean));
     }
@@ -130,21 +130,32 @@ const getRecentExcludes = async (
 
 // ─── Smart fallback pick with reasons ────────────────────────────────────────
 
-const smartFallbackPick = (candidates: TbrCandidate[], n: number, seed: number): RecommendationOut[] => {
+const smartFallbackPick = (
+  candidates: TbrCandidate[],
+  n: number,
+  seed: number,
+  selectedGenres: string[],
+  moodText: string,
+): RecommendationOut[] => {
   const shuffled = seededShuffle(candidates, seed);
   const picks = shuffled.slice(0, n);
 
-  const reasonTemplates = [
-    (c: TbrCandidate) => c.genre ? `A great ${c.genre} pick from your TBR` : "Waiting on your TBR — give it a try",
-    (c: TbrCandidate) => c.series_name ? `Continue the ${c.series_name} series` : `By ${c.author} — a solid choice`,
-    (_c: TbrCandidate) => "This one hasn't been recommended recently",
-    (_c: TbrCandidate) => "A fresh pick to shake up your reading list",
-  ];
-
-  const rng = seededRng(seed + 42);
   return picks.map((c) => {
-    const r1 = reasonTemplates[Math.floor(rng() * reasonTemplates.length)](c);
-    const r2 = reasonTemplates[Math.floor(rng() * reasonTemplates.length)](c);
+    const reasons: string[] = [];
+    if (c.genre && selectedGenres.length > 0) {
+      reasons.push(`Matches your selected genre: ${c.genre}`);
+    } else if (c.genre) {
+      reasons.push(`A great ${c.genre} pick from your TBR`);
+    } else {
+      reasons.push("Waiting on your TBR — give it a try");
+    }
+    if (moodText) {
+      reasons.push(`Fits your mood: ${moodText.slice(0, 40)}`);
+    } else if (c.series_name) {
+      reasons.push(`Continue the ${c.series_name} series`);
+    } else {
+      reasons.push(`By ${c.author} — a solid choice`);
+    }
     return {
       id: c.id,
       title: c.title,
@@ -152,7 +163,7 @@ const smartFallbackPick = (candidates: TbrCandidate[], n: number, seed: number):
       genre: c.genre || "General",
       tags: [],
       google_volume_id: c.google_volume_id || null,
-      reasons: [r1, r2 !== r1 ? r2 : "A worthy addition to your reading queue"],
+      reasons,
       source: "recommendation_engine",
     };
   });
@@ -164,6 +175,8 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
+  // ── Generate request_id for tracing ──
+  const requestId = crypto.randomUUID();
   const body = await req.json().catch(() => ({} as any));
   const debugMode = Boolean(body.debug);
   const selectedGenres: string[] = Array.isArray(body.genres) ? body.genres : [];
@@ -171,6 +184,8 @@ serve(async (req) => {
 
   // ── Generate a unique seed for this request ──
   const seed = Date.now() ^ (Math.random() * 0xffffffff);
+
+  console.log(`[recommend-from-library] START request_id=${requestId} genres=${JSON.stringify(selectedGenres)} mood=${moodText.slice(0, 50)}`);
 
   // ── Auth ──
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -189,7 +204,9 @@ serve(async (req) => {
   if (claimsError || !claimsData?.user) return json({ error: "Invalid or expired token." }, 401);
   const user = claimsData.user;
 
-  // ── Fetch ALL user's TBR books (for count) ──
+  console.log(`[recommend-from-library] request_id=${requestId} user_id=${user.id}`);
+
+  // ── Fetch ALL user's TBR books ──
   const { data: tbrData, error: tbrError } = await (supabase as any)
     .from("books")
     .select("id, title, author, genre, series_name, google_volume_id")
@@ -199,7 +216,7 @@ serve(async (req) => {
     .limit(500);
 
   if (tbrError) {
-    console.error("[recommend-from-library] DB error:", tbrError);
+    console.error(`[recommend-from-library] request_id=${requestId} DB error:`, tbrError);
     return json({ error: "Failed to load your TBR list." }, 500);
   }
 
@@ -213,6 +230,7 @@ serve(async (req) => {
   }));
 
   if (allTbr.length === 0) {
+    console.log(`[recommend-from-library] request_id=${requestId} no TBR books`);
     return json({
       recommendations: [],
       llm_used: false,
@@ -238,18 +256,20 @@ serve(async (req) => {
     genreFiltered = allTbr;
   }
 
+  console.log(`[recommend-from-library] request_id=${requestId} eligibility_count=${genreFiltered.length} tbr_total=${allTbr.length} strict_genre=${strictGenreMode}`);
+
   // ── Get recent excludes ──
   const recentExcludes = await getRecentExcludes(supabase as any, user.id);
+
+  console.log(`[recommend-from-library] request_id=${requestId} exclude_count=${recentExcludes.size}`);
 
   // ── Build candidate pool with exclude logic ──
   const freshGenreFiltered = genreFiltered.filter((c) => !recentExcludes.has(c.id));
 
-  // Build final candidate list: prefer fresh, fall back to all genre-matched
   let candidates: TbrCandidate[];
   if (freshGenreFiltered.length >= FIXED_N) {
     candidates = seededShuffle(freshGenreFiltered, seed).slice(0, FIXED_N);
   } else if (genreFiltered.length >= FIXED_N) {
-    // Use fresh first, fill with recently-shown genre matches
     const fresh = seededShuffle(freshGenreFiltered, seed);
     const remaining = seededShuffle(
       genreFiltered.filter((c) => recentExcludes.has(c.id)),
@@ -257,11 +277,10 @@ serve(async (req) => {
     );
     candidates = [...fresh, ...remaining].slice(0, FIXED_N);
   } else {
-    // Not enough genre-matched books — return what we have (strict: NO off-genre fills)
     candidates = seededShuffle(genreFiltered, seed);
   }
 
-  const finalN = candidates.length; // will be <= FIXED_N
+  const finalN = candidates.length;
 
   // Build a friendly message if fewer than 3 match
   let genreLimitedMessage: string | null = null;
@@ -269,11 +288,14 @@ serve(async (req) => {
     genreLimitedMessage = `Only ${genreFiltered.length} book${genreFiltered.length === 1 ? '' : 's'} match${genreFiltered.length === 1 ? 'es' : ''} your selected genre${selectedGenres.length > 1 ? 's' : ''}—try adding another genre for more options.`;
   }
 
+  console.log(`[recommend-from-library] request_id=${requestId} selected_book_ids=${candidates.map(c => c.id).join(",")}`);
+
   // ── Check Anthropic key ──
   const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
   const anthropicModel = Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-6";
 
   const debugInfo: any = debugMode ? {
+    request_id: requestId,
     provider_attempted: "none",
     model_attempted: null,
     candidate_count: candidates.length,
@@ -287,12 +309,12 @@ serve(async (req) => {
   } : null;
 
   if (!anthropicKey) {
-    const recs = smartFallbackPick(candidates, finalN, seed);
-    await persistRecommendations(supabase as any, user.id, recs);
+    const recs = smartFallbackPick(candidates, finalN, seed, selectedGenres, moodText);
+    const dbOk = await persistRecommendations(supabase as any, user.id, recs, requestId);
     return json({
       recommendations: recs, llm_used: false, provider: "recommendation_engine", model: null,
       is_tbr_strict: true, tbr_total: allTbr.length, target_n: finalN,
-      warnings: [],
+      warnings: dbOk ? [] : ["History write deferred"],
       ...(genreLimitedMessage ? { genre_limited_message: genreLimitedMessage } : {}),
       ...(debugInfo ? { debug: debugInfo } : {}),
     });
@@ -305,7 +327,7 @@ serve(async (req) => {
     id: c.id, title: c.title, author: c.author, genre: c.genre || "General",
   }));
 
-  const excludeIds = Array.from(recentExcludes).slice(0, 20);
+  const excludeIds = Array.from(recentExcludes).slice(0, 10);
   const systemPrompt = [
     "You are a book recommendation engine. You MUST select books ONLY from the candidate list provided.",
     "Return ONLY valid JSON. No markdown. No code fences. No commentary.",
@@ -379,8 +401,19 @@ serve(async (req) => {
           if (typeof rid !== "string") continue;
           const match = candidateMap.get(rid);
           if (!match) {
-            console.warn(`[recommend-from-library] Filtering invalid ID: ${rid}`);
+            console.warn(`[recommend-from-library] request_id=${requestId} Filtering invalid ID: ${rid}`);
             continue;
+          }
+          const llmReasons = Array.isArray(reasonsMap[rid])
+            ? reasonsMap[rid].map(String).slice(0, 3)
+            : [];
+          // Ensure "why" always exists
+          const reasons = llmReasons.length > 0 ? llmReasons : [];
+          if (match.genre && selectedGenres.length > 0) {
+            reasons.unshift(`Matches your selected genre: ${match.genre}`);
+          }
+          if (moodText && !reasons.some(r => r.toLowerCase().includes("mood"))) {
+            reasons.push(`Fits your mood: ${moodText.slice(0, 40)}`);
           }
           validRecs.push({
             id: match.id,
@@ -389,10 +422,8 @@ serve(async (req) => {
             genre: match.genre || "General",
             tags: [],
             google_volume_id: match.google_volume_id || null,
-            reasons: Array.isArray(reasonsMap[rid])
-              ? reasonsMap[rid].map(String).slice(0, 3)
-              : ["Recommended from your TBR"],
-            source: "claude",
+            reasons: reasons.slice(0, 3),
+            source: "recommendation_engine",
           });
         }
 
@@ -403,19 +434,21 @@ serve(async (req) => {
       }
     } else {
       const errText = await llmResponse.text().catch(() => "");
-      console.warn("[recommend-from-library] Anthropic error:", llmResponse.status, errText);
+      console.warn(`[recommend-from-library] request_id=${requestId} Anthropic error: ${llmResponse.status} ${errText}`);
     }
   } catch (err) {
-    console.error("[recommend-from-library] Claude call failed:", err);
+    console.error(`[recommend-from-library] request_id=${requestId} Claude call failed:`, err);
   }
 
   // ── Fallback if Claude failed or returned no valid IDs ──
   if (!llmSuccess || validRecs.length === 0) {
-    validRecs = smartFallbackPick(candidates, finalN, seed);
+    validRecs = smartFallbackPick(candidates, finalN, seed, selectedGenres, moodText);
   }
 
   // ── Persist to history ──
-  await persistRecommendations(supabase as any, user.id, validRecs);
+  const dbOk = await persistRecommendations(supabase as any, user.id, validRecs, requestId);
+
+  console.log(`[recommend-from-library] END request_id=${requestId} llm_used=${llmSuccess} count=${validRecs.length} db_write=${dbOk ? "success" : "error"}`);
 
   return json({
     recommendations: validRecs,
@@ -425,7 +458,7 @@ serve(async (req) => {
     is_tbr_strict: true,
     tbr_total: allTbr.length,
     target_n: finalN,
-    warnings: [],
+    warnings: dbOk ? [] : ["History write deferred"],
     ...(genreLimitedMessage ? { genre_limited_message: genreLimitedMessage } : {}),
     ...(debugInfo ? { debug: debugInfo } : {}),
   });
@@ -433,7 +466,9 @@ serve(async (req) => {
 
 // ─── Persist recommendations ─────────────────────────────────────────────────
 
-async function persistRecommendations(client: any, userId: string, recs: RecommendationOut[]) {
+async function persistRecommendations(
+  client: any, userId: string, recs: RecommendationOut[], requestId: string
+): Promise<boolean> {
   try {
     const historyPayload = recs.map((rec) => ({
       user_id: userId,
@@ -447,8 +482,15 @@ async function persistRecommendations(client: any, userId: string, recs: Recomme
       reasons: rec.reasons,
       why_new: "From your TBR list",
     }));
-    await client.from("copilot_recommendations").insert(historyPayload);
+    const { error } = await client.from("copilot_recommendations").insert(historyPayload);
+    if (error) {
+      console.error(`[recommend-from-library] request_id=${requestId} db_write_error:`, error.message);
+      return false;
+    }
+    console.log(`[recommend-from-library] request_id=${requestId} db_write_success count=${recs.length}`);
+    return true;
   } catch (e) {
-    console.warn("[recommend-from-library] Failed to persist history:", e);
+    console.error(`[recommend-from-library] request_id=${requestId} db_write_error:`, e);
+    return false;
   }
 }
