@@ -529,6 +529,10 @@ const Copilot = () => {
       if (data.genre_limited_message) {
         setStatusMessage(data.genre_limited_message);
       }
+      // Show friendly message when no recs returned (e.g. no prompt + no library)
+      if (recs.length === 0 && Array.isArray(data.warnings) && data.warnings.length > 0) {
+        setStatusMessage(data.warnings[0]);
+      }
       await loadHistory(userId);
       setLoadingRecommendations(false);
       return;
@@ -735,9 +739,22 @@ const Copilot = () => {
               <Button size="sm" variant="outline" onClick={lastRecommendMode === "tbr" ? fetchTbrRecommendations : fetchRecommendations} disabled={loadingRecommendations}>Retry</Button>
             </div>
           )}
-          {recommendations.length === 0 ? (
+          {recommendations.length === 0 && !loadingRecommendations && books.length === 0 && (
+            <div className="rounded-xl border border-dashed border-border/60 bg-card/60 p-6 text-center">
+              <p className="text-sm text-muted-foreground font-body mb-2">
+                No library yet? No problem — I can still recommend books based on your prompt.
+              </p>
+              <p className="text-xs text-muted-foreground/70 font-body">
+                Try: "cozy fantasy romance" or "fast-paced mystery with twists"
+              </p>
+              <Link to="/library" className="inline-block mt-3 text-xs text-primary hover:underline">
+                Import your library to get personalized picks from your TBR →
+              </Link>
+            </div>
+          )}
+          {recommendations.length === 0 && !loadingRecommendations && books.length > 0 ? (
             <p className="text-sm text-muted-foreground font-body py-4">Generate picks to see personalized recommendations.</p>
-          ) : (
+          ) : recommendations.length === 0 ? null : (
             recommendations.map((book) => (
               <Card key={book.id} className="border-border/60 bg-card/80"><CardContent className="p-6">
                 <div className="flex items-center justify-between">

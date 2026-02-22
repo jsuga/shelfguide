@@ -371,6 +371,96 @@ const persistHistory = async (
   }
 };
 
+// ─── Prompt-only AI recommendations (no library) ────────────────────────────
+
+const fetchPromptOnlyRecommendations = async (
+  promptText: string,
+  selectedGenres: string[],
+  requestId: string,
+): Promise<Recommendation[]> => {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (!LOVABLE_API_KEY) {
+    console.error(`[reading-copilot] request_id=${requestId} LOVABLE_API_KEY not set`);
+    return [];
+  }
+
+  const genreClause = selectedGenres.length > 0
+    ? `The user specifically wants these genres: ${selectedGenres.join(", ")}. All recommendations MUST be in one of these genres.`
+    : "";
+  const moodClause = promptText
+    ? `The user described what they want: "${promptText}"`
+    : "";
+
+  const systemPrompt = `You are a book recommendation expert. Return exactly 3 book recommendations as a JSON array.
+Each item must have: title (string), author (string), genre (string), why (array of exactly 3 strings).
+${genreClause}
+${moodClause}
+
+Rules for "why" bullets:
+- Each bullet must directly reference the user's request (their mood, genre preference, or specific ask).
+- Never use generic filler like "A great read" or "Highly recommended".
+- Be specific: mention what about the book matches what they asked for.
+- All 3 bullets must be distinct from each other AND distinct across the 3 books.
+- If genres were selected, the first bullet must explicitly state the genre match.
+
+Return ONLY a JSON array, no markdown, no commentary. Example:
+[{"title":"Book Name","author":"Author Name","genre":"Fantasy","why":["Bullet 1","Bullet 2","Bullet 3"]}]`;
+
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: promptText || `Recommend books in: ${selectedGenres.join(", ")}` },
+        ],
+        temperature: 0.7,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error(`[reading-copilot] request_id=${requestId} AI gateway error: ${response.status}`);
+      return [];
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "";
+
+    // Extract JSON array from response
+    const jsonMatch = content.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      console.error(`[reading-copilot] request_id=${requestId} AI response not parseable`);
+      return [];
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(parsed)) return [];
+
+    const recs: Recommendation[] = parsed.slice(0, 3).map((item: any, idx: number) => ({
+      id: `prompt-only-${requestId}-${idx}`,
+      title: item.title || "Unknown Title",
+      author: item.author || "Unknown Author",
+      genre: item.genre || (selectedGenres[0] || "General"),
+      tags: [],
+      summary: (item.why || []).join(". "),
+      source: "recommendation_engine",
+      reasons: (item.why || []).slice(0, 3),
+      why_new: (item.why || [])[0] || "",
+    }));
+
+    console.log(`[reading-copilot] request_id=${requestId} prompt_only_success count=${recs.length}`);
+    return recs;
+  } catch (e) {
+    console.error(`[reading-copilot] request_id=${requestId} prompt_only_error:`, e);
+    return [];
+  }
+};
+
 // ─── Main handler ────────────────────────────────────────────────────────────
 
 const FIXED_N = 3;
@@ -456,11 +546,32 @@ serve(async (req) => {
   const rotationState: Record<string, RotationContext> =
     (prefsRes.data?.rotation_state as Record<string, RotationContext>) || {};
 
-  if (allBooks.length === 0) {
-    console.log(`[reading-copilot] request_id=${requestId} no library books`);
+  // ── No-library / no-eligible prompt-only mode ──
+  const noLibrary = allBooks.length === 0;
+  if (noLibrary) {
+    console.log(`[reading-copilot] request_id=${requestId} NO_LIBRARY — using prompt-only AI mode`);
+
+    if (!promptText && selectedGenres.length === 0) {
+      return json({
+        recommendations: [],
+        mode: "no_library",
+        warnings: ["Tell me what you're in the mood for! Try a genre, mood, or describe what you want to read."],
+      });
+    }
+
+    // Build prompt-only recommendations via Lovable AI
+    const aiRecs = await fetchPromptOnlyRecommendations(promptText, selectedGenres, requestId);
+
+    // Persist to history
+    if (aiRecs.length > 0) {
+      await persistHistory(supabase, user.id, aiRecs, requestId);
+    }
+
     return json({
-      recommendations: [],
-      warnings: ["Your library is empty. Add some books to get personalized recommendations."],
+      recommendations: aiRecs,
+      mode: "prompt_only",
+      source: "recommendation_engine",
+      warnings: [],
     });
   }
 
