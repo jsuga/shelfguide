@@ -65,6 +65,36 @@ const json = (body: unknown, status = 200) =>
 const normalize = (v: string) => v.trim().toLowerCase();
 const compact = (v: string | null | undefined) => (v ? v.trim() : "");
 
+// Map mood-tag IDs from the UI to canonical DB genre names
+const MOOD_TAG_TO_GENRE: Record<string, string[]> = {
+  romance: ["Romance"],
+  mystery: ["Mystery"],
+  space: ["Science Fiction", "Sci-Fi"],
+  history: ["History", "Historical Fiction", "Biography"],
+  magic: ["Fantasy"],
+  epic: ["Fantasy", "Epic Fantasy"],
+  cozy: ["Cozy Mystery", "Mystery", "Romance"],
+  fast: [],            // pace modifier, not a genre
+  thoughtful: [],      // mood modifier, not a genre
+};
+
+/** Resolve UI tags to actual DB genre names for strict filtering */
+const resolveGenresFromTags = (tags: string[]): string[] => {
+  const resolved = new Set<string>();
+  for (const tag of tags) {
+    const mapped = MOOD_TAG_TO_GENRE[tag.toLowerCase()];
+    if (mapped && mapped.length > 0) {
+      mapped.forEach(g => resolved.add(g));
+    } else {
+      // Treat as a literal genre name (capitalised)
+      const cap = tag.charAt(0).toUpperCase() + tag.slice(1).toLowerCase();
+      resolved.add(cap);
+      resolved.add(tag); // also keep raw for case-insensitive matching
+    }
+  }
+  return [...resolved];
+};
+
 const getClientIp = (req: Request) => {
   const forwarded = req.headers.get("x-forwarded-for");
   if (forwarded) return forwarded.split(",")[0]?.trim() || null;
@@ -593,10 +623,12 @@ serve(async (req) => {
 
   const promptText = compact(body.prompt || "");
   const tagsArr: string[] = Array.isArray(body.tags) ? body.tags : [];
-  const selectedGenres: string[] = tagsArr
+  // Resolve mood-tag IDs to actual DB genre names for strict filtering
+  const rawTags: string[] = tagsArr
     .filter((t: string) => typeof t === "string")
     .map((t: string) => t.trim())
     .filter(Boolean);
+  const selectedGenres: string[] = resolveGenresFromTags(rawTags);
 
   const moodKeywords = promptText.toLowerCase().split(/[\s,]+/).filter((w: string) => w.length > 2);
 
@@ -808,11 +840,14 @@ serve(async (req) => {
 
   console.log(`[reading-copilot] request_id=${requestId} exclude_count=${excludeIds.length} (rotation=${rotationCooldownSet.size} db_recent=${dbExcludeSet.size})`);
 
-  // ── Build top candidates for Claude ──
-  const topCandidates = eligible
+  // ── Build candidates for Claude: remove excluded IDs, then take top 50 ──
+  const eligibleAfterExclude = eligible.filter(b => !mergedExcludeSet.has(b.id));
+  // If removing excludes leaves too few, allow some back
+  const poolForScoring = eligibleAfterExclude.length >= FIXED_N ? eligibleAfterExclude : eligible;
+  const topCandidates = poolForScoring
     .map(b => ({ book: b, score: scoreBook(b, authorCounts, genreCounts, rejectedTitles, selectedGenres, moodKeywords, mergedExcludeSet) }))
     .sort((a, b) => b.score - a.score)
-    .slice(0, 20)
+    .slice(0, 50)
     .map(s => s.book);
 
   const candidateIds = new Set(topCandidates.map(b => b.id));
@@ -984,13 +1019,21 @@ Return ONLY: {"recommendations":[{"book_id":"<uuid from candidate list>","why":[
     ...(COPILOT_DEBUG ? {
       _debug: {
         request_id: requestId,
+        request_type: "generate_picks",
+        selected_genres: selectedGenres,
+        raw_tags: rawTags,
         claude_called: claudeCalled,
         llm_used: llmUsed,
         source,
         candidate_count: topCandidates.length,
+        candidate_sample: topCandidates.slice(0, 5).map(b => ({
+          id: b.id, title: b.title, genre: b.genre, status: b.status,
+        })),
         exclude_count: excludeIds.length,
+        excluded_ids: excludeIds.slice(0, 10),
         match_score: matchScore,
         chosen_ids: recs.map(r => r.id),
+        validation_errors: [],
       },
     } : {}),
   });
