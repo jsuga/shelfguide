@@ -83,15 +83,10 @@ const hashIds = (ids: string[]): string => {
 };
 
 const extractJson = (text: string): any | null => {
-  // Try array first, then object
   const arrMatch = text.match(/\[[\s\S]*\]/);
-  if (arrMatch) {
-    try { return JSON.parse(arrMatch[0]); } catch { /* fall through */ }
-  }
+  if (arrMatch) { try { return JSON.parse(arrMatch[0]); } catch { /* */ } }
   const objMatch = text.match(/\{[\s\S]*\}/);
-  if (objMatch) {
-    try { return JSON.parse(objMatch[0]); } catch { /* fall through */ }
-  }
+  if (objMatch) { try { return JSON.parse(objMatch[0]); } catch { /* */ } }
   return null;
 };
 
@@ -128,6 +123,27 @@ const checkRateLimit = async (params: {
     .update({ count: data.count + 1, updated_at: now.toISOString() })
     .eq("key", params.key);
   return { allowed: true, retryAfter: 0 };
+};
+
+// ─── Fetch recent recommendation IDs from DB ────────────────────────────────
+
+const fetchRecentRecommendedIds = async (
+  client: any, userId: string, limit = 9,
+): Promise<string[]> => {
+  try {
+    const { data } = await client
+      .from("copilot_recommendations")
+      .select("book_id")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (!data) return [];
+    return data
+      .map((r: any) => r.book_id)
+      .filter((id: string | null) => id && !id.startsWith("prompt-"));
+  } catch {
+    return [];
+  }
 };
 
 // ─── Quality Scoring (fallback) ──────────────────────────────────────────────
@@ -222,7 +238,7 @@ const buildAllFallbackWhyBullets = (books: LibraryBook[], ctx: WhyContext): Map<
 
 const callClaude = async (
   systemPrompt: string, userMessage: string, requestId: string, retryCount = 0,
-): Promise<{ content: string; success: boolean }> => {
+): Promise<{ content: string; success: boolean; provider: string }> => {
   const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
   if (!ANTHROPIC_API_KEY) {
     console.warn(`[reading-copilot] request_id=${requestId} ANTHROPIC_API_KEY not set, trying Lovable AI`);
@@ -230,7 +246,7 @@ const callClaude = async (
   }
 
   try {
-    console.log(`[reading-copilot] request_id=${requestId} claude_call_started retry=${retryCount}`);
+    console.log(`[reading-copilot] request_id=${requestId} claude_call_start retry=${retryCount}`);
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -247,81 +263,84 @@ const callClaude = async (
     });
 
     if (response.status === 429 || response.status >= 500) {
+      const body = await response.text().catch(() => "");
+      console.error(`[reading-copilot] request_id=${requestId} claude_call_failure status=${response.status} body=${body.slice(0, 150)}`);
       if (retryCount < 2) {
         const delay = Math.pow(2, retryCount) * 1000;
         await new Promise(r => setTimeout(r, delay));
         return callClaude(systemPrompt, userMessage, requestId, retryCount + 1);
       }
-      console.error(`[reading-copilot] request_id=${requestId} claude_failed status=${response.status} after retries`);
       return callLovableAI(systemPrompt, userMessage, requestId);
     }
 
     if (!response.ok) {
       const errText = await response.text().catch(() => "");
-      console.error(`[reading-copilot] request_id=${requestId} claude_error status=${response.status} body=${errText.slice(0, 200)}`);
+      console.error(`[reading-copilot] request_id=${requestId} claude_call_failure status=${response.status} body=${errText.slice(0, 200)}`);
       return callLovableAI(systemPrompt, userMessage, requestId);
     }
 
     const data = await response.json();
     const content = data.content?.[0]?.text || "";
-    console.log(`[reading-copilot] request_id=${requestId} claude_success len=${content.length}`);
-    return { content, success: true };
+    console.log(`[reading-copilot] request_id=${requestId} claude_call_success len=${content.length} provider=anthropic`);
+    return { content, success: true, provider: "anthropic" };
   } catch (e) {
-    console.error(`[reading-copilot] request_id=${requestId} claude_exception:`, e);
+    console.error(`[reading-copilot] request_id=${requestId} claude_call_failure exception:`, e);
     return callLovableAI(systemPrompt, userMessage, requestId);
   }
 };
 
 const callLovableAI = async (
   systemPrompt: string, userMessage: string, requestId: string,
-): Promise<{ content: string; success: boolean }> => {
+): Promise<{ content: string; success: boolean; provider: string }> => {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) {
-    console.error(`[reading-copilot] request_id=${requestId} no AI keys available`);
-    return { content: "", success: false };
+    console.error(`[reading-copilot] request_id=${requestId} claude_call_failure no AI keys available`);
+    return { content: "", success: false, provider: "none" };
   }
   try {
-    console.log(`[reading-copilot] request_id=${requestId} lovable_ai_fallback_started`);
+    console.log(`[reading-copilot] request_id=${requestId} claude_call_start provider=lovable_ai_fallback`);
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
         messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }],
-        temperature: 0.7,
+        temperature: 0.8,
       }),
     });
     if (!response.ok) {
-      console.error(`[reading-copilot] request_id=${requestId} lovable_ai_error status=${response.status}`);
-      return { content: "", success: false };
+      const body = await response.text().catch(() => "");
+      console.error(`[reading-copilot] request_id=${requestId} claude_call_failure provider=lovable_ai status=${response.status} body=${body.slice(0, 150)}`);
+      return { content: "", success: false, provider: "lovable_ai" };
     }
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || "";
-    console.log(`[reading-copilot] request_id=${requestId} lovable_ai_success len=${content.length}`);
-    return { content, success: true };
+    console.log(`[reading-copilot] request_id=${requestId} claude_call_success len=${content.length} provider=lovable_ai`);
+    return { content, success: true, provider: "lovable_ai" };
   } catch (e) {
-    console.error(`[reading-copilot] request_id=${requestId} lovable_ai_exception:`, e);
-    return { content: "", success: false };
+    console.error(`[reading-copilot] request_id=${requestId} claude_call_failure provider=lovable_ai exception:`, e);
+    return { content: "", success: false, provider: "lovable_ai" };
   }
 };
 
 // ─── Claude prompt builders ──────────────────────────────────────────────────
 
 const buildLibrarySystemPrompt = (
-  selectedGenres: string[], moodText: string, excludeIds: string[],
+  selectedGenres: string[], moodText: string, excludeIds: string[], requestNonce: string,
 ) => {
   const genreRule = selectedGenres.length > 0
-    ? `STRICT RULE: Every recommended book MUST have a genre matching one of: [${selectedGenres.join(", ")}]. No exceptions.`
+    ? `STRICT RULE: Every recommended book MUST have a genre matching one of: [${selectedGenres.join(", ")}]. No exceptions. Do NOT recommend books outside these genres.`
     : "";
   const moodRule = moodText
-    ? `The user's mood/request: "${moodText}". Recommendations should match this vibe.`
+    ? `The user's mood/request: "${moodText}". Recommendations should strongly match this vibe and theme.`
     : "";
   const excludeRule = excludeIds.length > 0
-    ? `Do NOT choose these book_ids (recently shown): [${excludeIds.join(", ")}]`
+    ? `EXCLUDE RULE: Do NOT choose these book_ids (recently recommended, must avoid): [${excludeIds.join(", ")}]. Pick DIFFERENT books.`
     : "";
 
   return `You are a book recommendation expert selecting from a user's personal library.
 You will receive a list of candidate books with their metadata. Select exactly 3 books that best match the user's request.
+Each request is unique (nonce: ${requestNonce}). Provide fresh, varied selections.
 
 ${genreRule}
 ${moodRule}
@@ -333,25 +352,26 @@ Return ONLY valid JSON with this exact schema:
 Rules for "why" bullets:
 - Exactly 3 bullets per book.
 - Each bullet MUST reference specific aspects: the selected genre, the user's mood/request text, author affinity, series continuity, or reading status.
-- Never use generic filler like "great read", "dive back in", "you'll love this".
+- Never use generic filler like "great read", "dive back in", "you'll love this", "highly recommended".
 - Be specific: cite the book's genre, the user's stated mood, or concrete metadata.
-- All bullets must be distinct within and across recommendations. No duplicates.
-- If genres were selected, the first bullet must explicitly state the genre match.
-- If mood text was provided, at least one bullet must reference the mood/theme.
+- All bullets must be distinct within each book AND across all 3 recommendations. No duplicate or near-duplicate bullets.
+- If genres were selected, the first bullet MUST explicitly state the genre match (e.g., "Matches your Fantasy selection").
+- If mood text was provided, at least one bullet MUST reference the mood/theme specifically.
 
 Return ONLY the JSON object. No markdown, no commentary, no explanation outside JSON.`;
 };
 
-const buildPromptOnlySystemPrompt = (selectedGenres: string[], moodText: string) => {
+const buildPromptOnlySystemPrompt = (selectedGenres: string[], moodText: string, requestNonce: string) => {
   const genreRule = selectedGenres.length > 0
     ? `STRICT RULE: Every recommended book MUST be in one of these genres: [${selectedGenres.join(", ")}]. No exceptions.`
     : "";
   const moodRule = moodText
-    ? `The user's request: "${moodText}". All recommendations must match this.`
+    ? `The user's request: "${moodText}". All recommendations must closely match this theme and vibe.`
     : "";
 
   return `You are a book recommendation expert. The user has no personal library yet.
 Recommend exactly 3 real, published books based on their request.
+Each request is unique (nonce: ${requestNonce}). Provide fresh, varied selections different from common/obvious picks.
 
 ${genreRule}
 ${moodRule}
@@ -363,10 +383,9 @@ Rules for "why" bullets:
 - Exactly 3 bullets per book.
 - Each bullet must directly reference the user's request (genre, mood, theme, constraints).
 - Never use generic filler. Be specific about why THIS book matches THEIR request.
-- All bullets must be distinct within and across the 3 books.
+- All bullets must be distinct within each book AND across the 3 books.
 - If genres were selected, the first bullet must explicitly name the genre match.
 - If mood/request text was provided, at least one bullet must reference it.
-- Do NOT hallucinate metadata. Only reference what you know about the book.
 
 Return ONLY the JSON object. No markdown.`;
 };
@@ -387,12 +406,13 @@ const buildCandidateList = (books: LibraryBook[]): string => {
 
 const validateLibraryPicks = (
   picks: ClaudeLibraryPick[], candidateIds: Set<string>, selectedGenres: string[],
-  candidateMap: Map<string, LibraryBook>, excludeIds: Set<string>,
+  candidateMap: Map<string, LibraryBook>, excludeIds: Set<string>, eligibleCount: number,
 ): { valid: ClaudeLibraryPick[]; errors: string[] } => {
   const errors: string[] = [];
   const seen = new Set<string>();
   const usedBullets = new Set<string>();
   const valid: ClaudeLibraryPick[] = [];
+  const hasAlternatives = eligibleCount >= 6;
 
   for (const pick of picks) {
     if (!pick.book_id || !candidateIds.has(pick.book_id)) {
@@ -400,24 +420,27 @@ const validateLibraryPicks = (
       continue;
     }
     if (seen.has(pick.book_id)) { errors.push(`Duplicate: ${pick.book_id}`); continue; }
-    if (excludeIds.has(pick.book_id) && picks.length > 3) continue; // skip excluded only if alternatives
+
+    // Strict exclude enforcement when alternatives exist
+    if (excludeIds.has(pick.book_id) && hasAlternatives) {
+      errors.push(`Excluded book_id used: ${pick.book_id}`);
+      continue;
+    }
 
     // Genre check
     if (selectedGenres.length > 0) {
       const book = candidateMap.get(pick.book_id);
       if (book && book.genre && !selectedGenres.some(g => normalize(g) === normalize(book.genre!))) {
-        errors.push(`Genre mismatch for ${pick.book_id}`);
+        errors.push(`Genre mismatch for ${pick.book_id}: ${book.genre} not in [${selectedGenres.join(",")}]`);
         continue;
       }
     }
 
-    // Why bullets check
     if (!Array.isArray(pick.why) || pick.why.length < 2) {
       errors.push(`Insufficient why bullets for ${pick.book_id}`);
       continue;
     }
 
-    // Deduplicate bullets
     const cleanWhy = pick.why.filter(b => {
       const k = b.trim().toLowerCase();
       if (usedBullets.has(k)) return false;
@@ -476,7 +499,7 @@ const validatePromptPicks = (
   return { valid, errors };
 };
 
-// ─── Match Score (observability) ─────────────────────────────────────────────
+// ─── Match Score ─────────────────────────────────────────────────────────────
 
 const computeMatchScore = (
   recs: Recommendation[], selectedGenres: string[], moodKeywords: string[],
@@ -484,7 +507,7 @@ const computeMatchScore = (
   if (recs.length === 0) return 0;
   let total = 0;
   for (const rec of recs) {
-    let s = 30; // base
+    let s = 30;
     if (selectedGenres.length > 0 && selectedGenres.some(g => normalize(g) === normalize(rec.genre))) s += 30;
     if (moodKeywords.length > 0) {
       const bulletText = rec.reasons.join(" ").toLowerCase();
@@ -526,16 +549,17 @@ const persistHistory = async (
 // ─── Main handler ────────────────────────────────────────────────────────────
 
 const FIXED_N = 3;
+const COPILOT_DEBUG = Deno.env.get("COPILOT_DEBUG") !== "false"; // default ON, set COPILOT_DEBUG=false to disable
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const requestId = crypto.randomUUID();
+  const requestNonce = crypto.randomUUID().slice(0, 8); // per-request nonce to prevent stale/cached output
   const body = await req.json().catch(() => ({} as any));
-  const debugMode = Boolean(body.debug);
 
-  if (debugMode && !body.prompt && !body.tags) {
+  if (Boolean(body.debug) && !body.prompt && !body.tags) {
     return json({
       ok: true, function: "reading-copilot", request_id: requestId,
       env_present: {
@@ -576,7 +600,7 @@ serve(async (req) => {
 
   const moodKeywords = promptText.toLowerCase().split(/[\s,]+/).filter((w: string) => w.length > 2);
 
-  console.log(`[reading-copilot] START request_id=${requestId} user_id=${user.id} genres=${JSON.stringify(selectedGenres)} mood="${promptText.slice(0, 50)}"`);
+  console.log(`[reading-copilot] START request_id=${requestId} nonce=${requestNonce} user_id=${user.id} genres=${JSON.stringify(selectedGenres)} mood="${promptText.slice(0, 50)}"`);
 
   // ── Rate limiting ──
   const ip = getClientIp(req);
@@ -589,20 +613,24 @@ serve(async (req) => {
     return json({ error: "Rate limit exceeded. Please try again later.", retry_after: rateResult.retryAfter }, 429);
   }
 
-  // ── Fetch user's library + feedback + preferences ──
-  const [booksRes, feedbackRes, prefsRes] = await Promise.all([
+  // ── Fetch user's library + feedback + preferences + recent recommendations (parallel) ──
+  const [booksRes, feedbackRes, prefsRes, recentRecIds] = await Promise.all([
     (supabase as any).from("books").select("id,title,author,genre,series_name,status,rating,page_count,description,is_first_in_series")
       .eq("user_id", user.id).limit(1000),
     (supabase as any).from("copilot_feedback").select("book_id,title,author,genre,decision")
       .eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
     (supabase as any).from("copilot_preferences").select("rotation_state")
       .eq("user_id", user.id).maybeSingle(),
+    fetchRecentRecommendedIds(supabase, user.id, 9),
   ]);
 
   const allBooks: LibraryBook[] = (booksRes.data || []) as LibraryBook[];
   const feedback: Feedback[] = (feedbackRes.data || []) as Feedback[];
   const rotationState: Record<string, RotationContext> =
     (prefsRes.data?.rotation_state as Record<string, RotationContext>) || {};
+
+  // Merge DB recent recs with rotation cooldown for comprehensive exclude list
+  const dbExcludeSet = new Set(recentRecIds);
 
   // ════════════════════════════════════════════════════════════════════════════
   // PATH A: No library — prompt-only Claude mode
@@ -615,16 +643,19 @@ serve(async (req) => {
       return json({
         recommendations: [], mode: "no_library",
         warnings: ["Tell me what you're in the mood for! Try a genre, mood, or describe what you want to read."],
+        ...(COPILOT_DEBUG ? { _debug: { request_id: requestId, claude_called: false, llm_used: false, source: "none", candidate_count: 0, exclude_count: 0 } } : {}),
       });
     }
 
-    const systemPrompt = buildPromptOnlySystemPrompt(selectedGenres, promptText);
-    const userMsg = promptText || `Recommend books in: ${selectedGenres.join(", ")}`;
+    const systemPrompt = buildPromptOnlySystemPrompt(selectedGenres, promptText, requestNonce);
+    const userMsg = `${promptText || `Recommend books in: ${selectedGenres.join(", ")}`}\n\n(Request nonce: ${requestNonce} — provide fresh picks)`;
 
-    const { content, success } = await callClaude(systemPrompt, userMsg, requestId);
+    console.log(`[reading-copilot] request_id=${requestId} claude_call_start mode=prompt_only`);
+    const { content, success, provider } = await callClaude(systemPrompt, userMsg, requestId);
     let recs: Recommendation[] = [];
     let llmUsed = false;
     let source = "fallback";
+    let claudeCalled = true;
 
     if (success && content) {
       const parsed = extractJson(content);
@@ -633,7 +664,7 @@ serve(async (req) => {
       if (rawPicks) {
         const { valid, errors } = validatePromptPicks(rawPicks as ClaudePromptPick[], selectedGenres);
         if (errors.length > 0) {
-          console.warn(`[reading-copilot] request_id=${requestId} prompt_only_validation_errors:`, errors.join("; "));
+          console.warn(`[reading-copilot] request_id=${requestId} prompt_only_validation_errors: ${errors.join("; ")}`);
         }
 
         if (valid.length > 0) {
@@ -645,15 +676,13 @@ serve(async (req) => {
           }));
           llmUsed = true;
           source = "claude";
-          console.log(`[reading-copilot] request_id=${requestId} prompt_only_claude_valid count=${recs.length}`);
+          console.log(`[reading-copilot] request_id=${requestId} claude_call_success mode=prompt_only count=${recs.length} provider=${provider}`);
         }
       }
 
-      // If Claude returned < 3 valid, retry once with correction
-      if (recs.length < FIXED_N && recs.length > 0) {
-        console.log(`[reading-copilot] request_id=${requestId} prompt_only partial=${recs.length}, not retrying (partial is ok)`);
-      } else if (recs.length === 0) {
-        console.log(`[reading-copilot] request_id=${requestId} prompt_only_claude_invalid, retrying with correction`);
+      // Retry if zero valid
+      if (recs.length === 0) {
+        console.log(`[reading-copilot] request_id=${requestId} prompt_only_invalid, retrying with correction`);
         const retryMsg = `Your previous response was invalid. ${userMsg}\nReturn ONLY valid JSON: {"recommendations":[{"title":"...","author":"...","genre":"...","why":["...","...","..."]}]}`;
         const retry = await callClaude(systemPrompt, retryMsg, requestId);
         if (retry.success && retry.content) {
@@ -674,23 +703,27 @@ serve(async (req) => {
           }
         }
       }
+    } else {
+      console.log(`[reading-copilot] request_id=${requestId} claude_call_failure mode=prompt_only`);
     }
 
     if (recs.length === 0) {
-      console.warn(`[reading-copilot] request_id=${requestId} prompt_only_all_failed`);
+      console.warn(`[reading-copilot] request_id=${requestId} fallback_used mode=prompt_only`);
       return json({
         recommendations: [], mode: "prompt_only",
         warnings: ["Couldn't generate recommendations right now. Please try again or adjust your request."],
+        ...(COPILOT_DEBUG ? { _debug: { request_id: requestId, claude_called: claudeCalled, llm_used: false, source: "failed", candidate_count: 0, exclude_count: 0 } } : {}),
       });
     }
 
     const matchScore = computeMatchScore(recs, selectedGenres, moodKeywords);
     await persistHistory(supabase, user.id, recs, requestId, llmUsed, source);
-    console.log(`[reading-copilot] END request_id=${requestId} mode=prompt_only count=${recs.length} source=${source} match_score=${matchScore}`);
+    console.log(`[reading-copilot] END request_id=${requestId} mode=prompt_only count=${recs.length} source=${source} llm_used=${llmUsed} match_score=${matchScore}`);
 
     return json({
       recommendations: recs, mode: "prompt_only",
       source: "recommendation_engine", warnings: [],
+      ...(COPILOT_DEBUG ? { _debug: { request_id: requestId, claude_called: claudeCalled, llm_used: llmUsed, source, candidate_count: 0, exclude_count: 0, match_score: matchScore, chosen_ids: recs.map(r => r.id) } } : {}),
     });
   }
 
@@ -726,7 +759,7 @@ serve(async (req) => {
     });
   }
 
-  console.log(`[reading-copilot] request_id=${requestId} eligible_count=${eligible.length} total_books=${allBooks.length}`);
+  console.log(`[reading-copilot] request_id=${requestId} eligible_count=${eligible.length} total_books=${allBooks.length} strict_genre=${strictGenreMode}`);
 
   if (eligible.length === 0) {
     return json({
@@ -734,6 +767,7 @@ serve(async (req) => {
       warnings: strictGenreMode
         ? ["No books match your selected genre(s). Try a different genre or add more books."]
         : ["No eligible books found. Add books to your library to get recommendations."],
+      ...(COPILOT_DEBUG ? { _debug: { request_id: requestId, claude_called: false, llm_used: false, source: "none", candidate_count: 0, exclude_count: 0 } } : {}),
     });
   }
 
@@ -767,13 +801,16 @@ serve(async (req) => {
     };
   }
 
-  const cooldownSet = new Set(rotCtx!.cooldown_ids.slice(-9));
-  const excludeIds = [...cooldownSet];
+  // Merge rotation cooldown with DB recent recs for comprehensive exclude
+  const rotationCooldownSet = new Set(rotCtx!.cooldown_ids.slice(-9));
+  const mergedExcludeSet = new Set([...rotationCooldownSet, ...dbExcludeSet]);
+  const excludeIds = [...mergedExcludeSet];
 
-  // ── Call Claude with top candidates ──
-  // Send top ~20 scored candidates to Claude
+  console.log(`[reading-copilot] request_id=${requestId} exclude_count=${excludeIds.length} (rotation=${rotationCooldownSet.size} db_recent=${dbExcludeSet.size})`);
+
+  // ── Build top candidates for Claude ──
   const topCandidates = eligible
-    .map(b => ({ book: b, score: scoreBook(b, authorCounts, genreCounts, rejectedTitles, selectedGenres, moodKeywords, cooldownSet) }))
+    .map(b => ({ book: b, score: scoreBook(b, authorCounts, genreCounts, rejectedTitles, selectedGenres, moodKeywords, mergedExcludeSet) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 20)
     .map(s => s.book);
@@ -781,26 +818,28 @@ serve(async (req) => {
   const candidateIds = new Set(topCandidates.map(b => b.id));
   const candidateMap = new Map(topCandidates.map(b => [b.id, b]));
 
-  // Build user profile summary for Claude
   const topAuthors = Object.entries(authorCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k]) => k);
   const topGenresArr = Object.entries(genreCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k]) => k);
 
-  const systemPrompt = buildLibrarySystemPrompt(selectedGenres, promptText, excludeIds);
+  const systemPrompt = buildLibrarySystemPrompt(selectedGenres, promptText, excludeIds, requestNonce);
   const candidateList = buildCandidateList(topCandidates);
   const userMsg = `User profile: top authors=[${topAuthors.join(", ")}], top genres=[${topGenresArr.join(", ")}], library size=${allBooks.length}
 
-Candidate books:
+Candidate books (pick from these ONLY):
 ${candidateList}
 
 ${promptText ? `User's current request: "${promptText}"` : "User wants general recommendations from their library."}
-${selectedGenres.length > 0 ? `Selected genres (STRICT): ${selectedGenres.join(", ")}` : ""}
+${selectedGenres.length > 0 ? `Selected genres (STRICT — all picks must match): ${selectedGenres.join(", ")}` : ""}
+${excludeIds.length > 0 ? `Recently shown (MUST AVOID these IDs): ${excludeIds.join(", ")}` : ""}
 
-Select exactly 3 books from the candidates above.`;
+Select exactly 3 books. (Request nonce: ${requestNonce})`;
 
-  const { content, success } = await callClaude(systemPrompt, userMsg, requestId);
+  console.log(`[reading-copilot] request_id=${requestId} claude_call_start mode=library candidate_count=${topCandidates.length} exclude_count=${excludeIds.length}`);
+  const { content, success, provider } = await callClaude(systemPrompt, userMsg, requestId);
   let recs: Recommendation[] = [];
   let llmUsed = false;
   let source = "fallback";
+  const claudeCalled = true;
 
   if (success && content) {
     const parsed = extractJson(content);
@@ -808,7 +847,7 @@ Select exactly 3 books from the candidates above.`;
 
     if (rawPicks) {
       const { valid, errors } = validateLibraryPicks(
-        rawPicks as ClaudeLibraryPick[], candidateIds, selectedGenres, candidateMap, new Set(excludeIds),
+        rawPicks as ClaudeLibraryPick[], candidateIds, selectedGenres, candidateMap, mergedExcludeSet, eligible.length,
       );
       if (errors.length > 0) {
         console.warn(`[reading-copilot] request_id=${requestId} claude_validation_errors: ${errors.join("; ")}`);
@@ -826,21 +865,21 @@ Select exactly 3 books from the candidates above.`;
         });
         llmUsed = true;
         source = "claude";
-        console.log(`[reading-copilot] request_id=${requestId} claude_library_valid count=${recs.length} ids=[${recs.map(r => r.id).join(",")}]`);
+        console.log(`[reading-copilot] request_id=${requestId} claude_call_success mode=library count=${recs.length} provider=${provider} chosen_ids=[${recs.map(r => r.id).join(",")}]`);
       }
 
-      // Retry once if Claude gave invalid response
+      // Retry once if invalid
       if (recs.length === 0) {
-        console.log(`[reading-copilot] request_id=${requestId} claude_invalid, retrying with correction`);
-        const retryMsg = `Your previous response was invalid. Errors: ${(rawPicks ? "validation failed" : "could not parse JSON")}.
+        console.log(`[reading-copilot] request_id=${requestId} claude_validation_failed, retrying with correction`);
+        const retryMsg = `Your previous response was invalid (errors: validation failed). Try again.
 ${userMsg}
-Return ONLY: {"recommendations":[{"book_id":"<uuid from list>","why":["bullet1","bullet2","bullet3"]}]}`;
+Return ONLY: {"recommendations":[{"book_id":"<uuid from candidate list>","why":["bullet1","bullet2","bullet3"]}]}`;
         const retry = await callClaude(systemPrompt, retryMsg, requestId);
         if (retry.success && retry.content) {
           const p2 = extractJson(retry.content);
           const raw2 = p2?.recommendations || (Array.isArray(p2) ? p2 : null);
           if (raw2) {
-            const v2 = validateLibraryPicks(raw2 as ClaudeLibraryPick[], candidateIds, selectedGenres, candidateMap, new Set(excludeIds));
+            const v2 = validateLibraryPicks(raw2 as ClaudeLibraryPick[], candidateIds, selectedGenres, candidateMap, mergedExcludeSet, eligible.length);
             if (v2.valid.length > 0) {
               recs = v2.valid.map(pick => {
                 const book = candidateMap.get(pick.book_id)!;
@@ -853,16 +892,19 @@ Return ONLY: {"recommendations":[{"book_id":"<uuid from list>","why":["bullet1",
               });
               llmUsed = true;
               source = "claude";
+              console.log(`[reading-copilot] request_id=${requestId} claude_call_success mode=library_retry count=${recs.length} provider=${retry.provider}`);
             }
           }
         }
       }
     }
+  } else {
+    console.log(`[reading-copilot] request_id=${requestId} claude_call_failure mode=library`);
   }
 
   // ── Fallback: scoring-based selection if Claude failed ──
   if (recs.length === 0) {
-    console.log(`[reading-copilot] request_id=${requestId} claude_failed, using scoring fallback`);
+    console.log(`[reading-copilot] request_id=${requestId} fallback_used mode=library`);
     source = "fallback_scoring";
 
     const rankedIds = rotCtx!.ranked_ids;
@@ -878,11 +920,11 @@ Return ONLY: {"recommendations":[{"book_id":"<uuid from list>","why":["bullet1",
       cursor++;
       if (cursor - startCursor >= rankedIds.length && !wrappedOnce) {
         wrappedOnce = true;
-        if (selected.length < FIXED_N) cooldownSet.clear();
+        if (selected.length < FIXED_N) mergedExcludeSet.clear();
       }
       const book = eligibleMap.get(bookId);
       if (!book) continue;
-      if (cooldownSet.has(bookId) && !wrappedOnce) continue;
+      if (mergedExcludeSet.has(bookId) && !wrappedOnce) continue;
       selected.push(book);
     }
 
@@ -896,8 +938,7 @@ Return ONLY: {"recommendations":[{"book_id":"<uuid from list>","why":["bullet1",
       reasons: whyMap.get(book.id) || [], why_new: (whyMap.get(book.id) || [])[0] || "",
     }));
 
-    // Update cursor for fallback path
-    rotCtx!.cursor = rotCtx!.cursor + selected.length;
+    rotCtx!.cursor = cursor;
   }
 
   // ── Update rotation state ──
@@ -933,18 +974,23 @@ Return ONLY: {"recommendations":[{"book_id":"<uuid from list>","why":["bullet1",
     genreLimitedMessage = "Limited matches in this genre—add another genre for more variety.";
   }
 
-  console.log(`[reading-copilot] END request_id=${requestId} count=${recs.length} source=${source} llm_used=${llmUsed} match_score=${matchScore} db_write=${dbOk ? "ok" : "error"}`);
+  console.log(`[reading-copilot] END request_id=${requestId} count=${recs.length} source=${source} llm_used=${llmUsed} match_score=${matchScore} chosen_ids=[${recs.map(r => r.id).join(",")}] db_write=${dbOk ? "ok" : "error"}`);
 
   return json({
     recommendations: recs,
     source: "recommendation_engine",
     warnings: dbOk ? [] : ["History write deferred"],
     ...(genreLimitedMessage ? { genre_limited_message: genreLimitedMessage } : {}),
-    ...(debugMode ? {
-      debug: {
-        request_id: requestId, eligible_count: eligible.length,
-        source, llm_used: llmUsed, match_score: matchScore,
-        context_key: contextKey,
+    ...(COPILOT_DEBUG ? {
+      _debug: {
+        request_id: requestId,
+        claude_called: claudeCalled,
+        llm_used: llmUsed,
+        source,
+        candidate_count: topCandidates.length,
+        exclude_count: excludeIds.length,
+        match_score: matchScore,
+        chosen_ids: recs.map(r => r.id),
       },
     } : {}),
   });
