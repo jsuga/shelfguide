@@ -1294,10 +1294,19 @@ const Library = () => {
                   </>
                 }
                 actionsNode={
-                  <>
-                    <Button variant="outline" size="sm" onClick={() => startEditing(index)}>Edit</Button>
-                    <Button variant="ghost" size="sm" onClick={() => deleteBook(index)}>Delete</Button>
-                  </>
+                  <div className="grid gap-1">
+                    <div className="flex items-center gap-1">
+                      <Button variant="outline" size="sm" onClick={() => startEditing(index)}>Edit</Button>
+                      <Button variant="ghost" size="sm" onClick={() => deleteBook(index)}>Delete</Button>
+                    </div>
+                    {book.id && (
+                      <BookNotes
+                        bookId={book.id}
+                        initialComment={book.user_comment ?? null}
+                        userId={userId}
+                      />
+                    )}
+                  </div>
                 }
                 ratingNode={
                   <StarRating
@@ -1310,13 +1319,6 @@ const Library = () => {
                   <>
                     {book.genre && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.genre}</span>}
                     {book.series_name && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.series_name}</span>}
-                    {book.id && (
-                      <BookNotes
-                        bookId={book.id}
-                        initialComment={book.user_comment ?? null}
-                        userId={userId}
-                      />
-                    )}
                   </>
                 }
               />
