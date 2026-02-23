@@ -644,17 +644,6 @@ const Copilot = () => {
               <label className="text-sm font-medium">What are you in the mood for?</label>
               <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Examples: cozy mystery, epic fantasy, or a fast sci-fi adventure." className="min-h-[90px]" />
             </div>
-            <div className="flex flex-wrap gap-2">
-              {MOOD_TAGS.map((tag) => {
-                const active = promptTags.includes(tag.id);
-                return (
-                  <Button key={tag.id} type="button" size="sm" variant={active ? "default" : "outline"}
-                    onClick={() => setSelectedTags((prev) => prev.includes(tag.id) ? prev.filter((i) => i !== tag.id) : [...prev, tag.id])}>
-                    {tag.label}
-                  </Button>
-                );
-              })}
-            </div>
             <div className="flex flex-wrap gap-3">
               <Button onClick={fetchRecommendations} disabled={loadingRecommendations}><Sparkles className="w-4 h-4 mr-2" />{loadingRecommendations ? "Thinking..." : "Generate picks"}</Button>
                <Button variant="secondary" onClick={fetchTbrRecommendations} disabled={loadingRecommendations || !userId}><BookOpen className="w-4 h-4 mr-2" />{loadingRecommendations ? "Thinking..." : "Recommend from My TBR"}</Button>
