@@ -102,7 +102,8 @@ const Preferences = () => {
     localStorage.removeItem("reading-copilot-feedback");
     localStorage.removeItem("shelfguide-pending-library-sync");
     localStorage.removeItem("shelfguide-pending-feedback-sync");
-    localStorage.removeItem("shelfguide-cover-cache");
+    // Intentionally keep "shelfguide-cover-cache" so cached covers
+    // are reused when the same books are re-imported later.
     clearNeedsAttentionItems(userId);
     setDeleting(false);
     setDeleteDialogOpen(false);
@@ -305,7 +306,7 @@ const Preferences = () => {
             <h2 className="font-display text-2xl font-bold text-destructive">Danger Zone</h2>
           </div>
           <p className="text-sm text-muted-foreground font-body mb-4">
-            Permanently delete your entire library, feedback, recommendations, and import history from both local storage and the cloud.
+            Permanently delete your library, feedback, recommendations, and import history. Cached covers are kept to speed up future imports.
           </p>
           <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)}>Delete My Library</Button>
         </section>
@@ -317,7 +318,7 @@ const Preferences = () => {
             <DialogTitle className="text-destructive font-display text-xl">Delete Your Library</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            This will permanently delete all your books, feedback, and recommendations from both local storage and the cloud. <strong>This cannot be undone.</strong>
+            This will permanently delete your books, feedback, and recommendations. Cached covers are preserved so future imports load faster. <strong>This cannot be undone.</strong>
           </p>
           <div className="grid gap-2 mt-4">
             <Label>Type <strong>DELETE</strong> to confirm</Label>
