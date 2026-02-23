@@ -15,6 +15,7 @@ type LibraryBook = {
   description: string | null;
   tags?: string[];
   is_first_in_series?: boolean;
+  user_comment?: string | null;
 };
 
 type Feedback = {
@@ -369,7 +370,8 @@ const buildLibrarySystemPrompt = (
     : "";
 
   return `You are a book recommendation expert selecting from a user's personal library.
-You will receive a list of candidate books with their metadata. Select exactly 3 books that best match the user's request.
+You will receive a list of candidate books with their metadata. Some books include user_note fields — these are the user's personal annotations about what they liked/disliked. Use these notes to understand the user's preferences (e.g., if they mention liking "found family" themes, prioritize similar books).
+Select exactly 3 books that best match the user's request.
 Each request is unique (nonce: ${requestNonce}). Provide fresh, varied selections.
 
 ${genreRule}
@@ -428,6 +430,7 @@ const buildCandidateList = (books: LibraryBook[]): string => {
     if (b.status) parts.push(`status:${b.status}`);
     if (b.page_count) parts.push(`pages:${b.page_count}`);
     if (b.description) parts.push(`desc:"${b.description.slice(0, 80)}"`);
+    if (b.user_comment) parts.push(`user_note:"${b.user_comment.slice(0, 100)}"`);
     return parts.join(" | ");
   }).join("\n");
 };
@@ -647,7 +650,7 @@ serve(async (req) => {
 
   // ── Fetch user's library + feedback + preferences + recent recommendations (parallel) ──
   const [booksRes, feedbackRes, prefsRes, recentRecIds] = await Promise.all([
-    (supabase as any).from("books").select("id,title,author,genre,series_name,status,rating,page_count,description,is_first_in_series")
+    (supabase as any).from("books").select("id,title,author,genre,series_name,status,rating,page_count,description,is_first_in_series,user_comment")
       .eq("user_id", user.id).limit(1000),
     (supabase as any).from("copilot_feedback").select("book_id,title,author,genre,decision")
       .eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),

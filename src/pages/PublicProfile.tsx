@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import BookCard from "@/components/books/BookCard";
 import BookGrid from "@/components/books/BookGrid";
+import BookNotes from "@/components/books/BookNotes";
 import SearchInput from "@/components/SearchInput";
 import { supabase } from "@/integrations/supabase/client";
 import type { ProfileRow } from "@/lib/profiles";
@@ -19,6 +20,7 @@ type PublicBook = {
   cover_url: string | null;
   thumbnail: string | null;
   cover_storage_path: string | null;
+  user_comment: string | null;
 };
 
 const PublicProfile = () => {
@@ -68,7 +70,7 @@ const PublicProfile = () => {
       setProfile(castProfile);
       const { data: profileBooks, error: booksError } = await (supabase as any)
         .from("books")
-        .select("id,title,author,genre,status,series_name,cover_url,thumbnail,cover_storage_path")
+        .select("id,title,author,genre,status,series_name,cover_url,thumbnail,cover_storage_path,user_comment")
         .eq("user_id", castProfile.user_id)
         .order("created_at", { ascending: false })
         .limit(200);
@@ -192,6 +194,14 @@ const PublicProfile = () => {
                       <span className="rounded-full bg-secondary/70 px-2 py-0.5">
                         {book.series_name}
                       </span>
+                    )}
+                    {book.user_comment && (
+                      <BookNotes
+                        bookId={book.id}
+                        initialComment={book.user_comment}
+                        userId={null}
+                        readOnly
+                      />
                     )}
                   </>
                 }

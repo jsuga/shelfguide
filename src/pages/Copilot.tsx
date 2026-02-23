@@ -23,6 +23,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import SynopsisToggle from "@/components/books/SynopsisToggle";
 import {
   enqueueFeedbackSync,
   enqueueLibrarySync,
@@ -769,6 +770,7 @@ const Copilot = () => {
                   </ul>
                 )}
                 {book.why_new && <p className="mt-2 text-sm italic text-muted-foreground/80 font-body">{book.why_new}</p>}
+                <SynopsisToggle bookTitle={book.title} bookAuthor={book.author} />
                 <div className="mt-4 flex flex-wrap gap-3">
                   <Button size="sm" onClick={() => handleDecision(book, "accepted")}><ThumbsUp className="w-4 h-4 mr-2" />Good pick</Button>
                   <Button size="sm" variant="outline" onClick={() => setRejectingBookId(rejectingBookId === book.id ? null : book.id)}>

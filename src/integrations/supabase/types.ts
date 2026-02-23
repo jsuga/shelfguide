@@ -46,6 +46,7 @@ export type Database = {
           thumbnail: string | null
           title: string
           updated_at: string
+          user_comment: string | null
           user_id: string
         }
         Insert: {
@@ -79,6 +80,7 @@ export type Database = {
           thumbnail?: string | null
           title: string
           updated_at?: string
+          user_comment?: string | null
           user_id: string
         }
         Update: {
@@ -112,6 +114,7 @@ export type Database = {
           thumbnail?: string | null
           title?: string
           updated_at?: string
+          user_comment?: string | null
           user_id?: string
         }
         Relationships: []
@@ -232,6 +235,7 @@ export type Database = {
           author: string | null
           book_id: string | null
           created_at: string | null
+          description: string | null
           genre: string | null
           id: string
           reasons: string[] | null
@@ -246,6 +250,7 @@ export type Database = {
           author?: string | null
           book_id?: string | null
           created_at?: string | null
+          description?: string | null
           genre?: string | null
           id?: string
           reasons?: string[] | null
@@ -260,6 +265,7 @@ export type Database = {
           author?: string | null
           book_id?: string | null
           created_at?: string | null
+          description?: string | null
           genre?: string | null
           id?: string
           reasons?: string[] | null
