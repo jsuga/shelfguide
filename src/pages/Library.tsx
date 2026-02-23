@@ -58,6 +58,7 @@ type LibraryBook = {
   cover_failed_at?: string | null;
   source?: string | null;
   user_comment?: string | null;
+  comment_visibility?: string | null;
 };
 
 const ENABLE_COVER_CACHE = true;
@@ -1303,6 +1304,7 @@ const Library = () => {
                       <BookNotes
                         bookId={book.id}
                         initialComment={book.user_comment ?? null}
+                        initialVisibility={(book.comment_visibility as "private" | "friends" | "community") || "private"}
                         userId={userId}
                       />
                     )}

@@ -26,6 +26,7 @@ const navLinks = [
   { path: "/tbr-wheel", label: "TBR Wheel" },
   { path: "/copilot", label: "Copilot" },
   { path: "/community", label: "Community" },
+  { path: "/friends", label: "Friends" },
   { path: "/preferences", label: "Settings" },
 ];
 
