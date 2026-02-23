@@ -167,15 +167,53 @@ const TbrWheel = () => {
     setWinner(null); setRotation(0); setSampleNonce((v) => v + 1);
   };
 
+  /**
+   * Angle convention:
+   * - The wheel SVG rotates clockwise via CSS transform rotate(Ndeg).
+   * - The pointer is at the TOP (12 o'clock / 0°).
+   * - Slice 0 starts at 0° and spans sliceAngle degrees clockwise.
+   * - When the wheel is rotated by R degrees, the slice under the pointer is
+   *   determined by: effectiveAngle = (360 - (R % 360)) % 360, then
+   *   index = floor(effectiveAngle / sliceAngle).
+   */
+
+  /** Normalize any angle to [0, 360) */
+  const normalizeAngle = (angle: number) => ((angle % 360) + 360) % 360;
+
+  /** Get the slice index from a given wheel rotation angle */
+  const getIndexFromAngle = (rotationDeg: number, count: number) => {
+    if (count <= 0) return -1;
+    const sliceAngle = 360 / count;
+    const effective = normalizeAngle(360 - normalizeAngle(rotationDeg));
+    return Math.floor(effective / sliceAngle) % count;
+  };
+
+  /** Get the rotation angle that lands the pointer at the CENTER of the given slice index */
+  const getAngleForIndexCenter = (index: number, count: number) => {
+    if (count <= 0) return 0;
+    const sliceAngle = 360 / count;
+    // Center of slice `index` is at (index * sliceAngle + sliceAngle / 2) degrees.
+    // To put that under the top pointer, rotate by: 360 - (index * sliceAngle + sliceAngle / 2)
+    return normalizeAngle(360 - (index * sliceAngle + sliceAngle / 2));
+  };
+
   // Spin: opens full-screen AND starts animation immediately
   const spin = () => {
     if (wheelBooks.length === 0 || spinning) return;
     setWinner(null); // Clear previous winner — result only shown after animation ends
     setFullScreenSpin(true);
+
+    // 1. Pick a target index first
     const winnerIndex = pickWinnerIndex(wheelBooks.length);
-    const anglePer = 360 / wheelBooks.length;
+
+    // 2. Compute the exact landing angle that centers this slice under the pointer
+    const landingAngle = getAngleForIndexCenter(winnerIndex, wheelBooks.length);
+
+    // 3. Add full rotations for visual spin effect. Normalize base to avoid float drift.
+    const baseRotation = normalizeAngle(rotation);
     const turns = 4 + Math.floor(Math.random() * 2);
-    const targetRotation = rotation + turns * 360 + (360 - winnerIndex * anglePer - anglePer / 2);
+    const targetRotation = baseRotation + turns * 360 + landingAngle;
+
     setSpinDuration(3200);
     // Use requestAnimationFrame to ensure modal is rendered before spin starts
     requestAnimationFrame(() => {
@@ -184,7 +222,14 @@ const TbrWheel = () => {
         setSpinning(true);
       });
     });
-    setTimeout(() => { setWinner(wheelBooks[winnerIndex] ?? null); setSpinning(false); }, 3400);
+    setTimeout(() => {
+      // Derive winner deterministically from the final angle as single source of truth
+      const resolvedIndex = getIndexFromAngle(targetRotation, wheelBooks.length);
+      setWinner(wheelBooks[resolvedIndex] ?? null);
+      setSpinning(false);
+      // Normalize rotation to prevent float drift on next spin
+      setRotation(normalizeAngle(targetRotation));
+    }, 3400);
   };
 
   const startReading = async () => {

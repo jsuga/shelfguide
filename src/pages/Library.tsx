@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookMarked } from "lucide-react";
+import { BookMarked, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,8 @@ import SearchInput from "@/components/SearchInput";
 import StatusSelector from "@/components/StatusSelector";
 import BookCard from "@/components/books/BookCard";
 import BookGrid from "@/components/books/BookGrid";
+import BookNotes from "@/components/books/BookNotes";
+import BookScanner from "@/components/books/BookScanner";
 import { supabase } from "@/integrations/supabase/client";
 import {
   enqueueLibrarySync,
@@ -55,6 +57,7 @@ type LibraryBook = {
   cover_source?: string | null;
   cover_failed_at?: string | null;
   source?: string | null;
+  user_comment?: string | null;
 };
 
 const ENABLE_COVER_CACHE = true;
@@ -119,6 +122,16 @@ const Library = () => {
   const coverCacheProcessingRef = useRef(false);
   const coverCacheAuthNoticeRef = useRef(false);
   const coverCacheErrorLoggedRef = useRef<Set<string>>(new Set());
+  const [scannerOpen, setScannerOpen] = useState(false);
+
+  const existingIsbns = useMemo(() => {
+    const set = new Set<string>();
+    books.forEach((b) => {
+      if (b.isbn) set.add(b.isbn.replace(/[^0-9xX]/g, "").trim());
+      if (b.isbn13) set.add(b.isbn13.replace(/[^0-9xX]/g, "").trim());
+    });
+    return set;
+  }, [books]);
 
   const getLocalBooks = () => {
     const stored = localStorage.getItem("reading-copilot-library");
@@ -1094,6 +1107,14 @@ const Library = () => {
             >
               Import Library
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs px-3 h-8 gap-1"
+              onClick={() => setScannerOpen(true)}
+            >
+              <Camera className="w-3 h-3" /> Scan Book
+            </Button>
           </div>
         </div>
       </div>
@@ -1289,6 +1310,13 @@ const Library = () => {
                   <>
                     {book.genre && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.genre}</span>}
                     {book.series_name && <span className="rounded-full bg-secondary/70 px-2 py-0.5">{book.series_name}</span>}
+                    {book.id && (
+                      <BookNotes
+                        bookId={book.id}
+                        initialComment={book.user_comment ?? null}
+                        userId={userId}
+                      />
+                    )}
                   </>
                 }
               />
@@ -1347,6 +1375,47 @@ const Library = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      <BookScanner
+        open={scannerOpen}
+        onOpenChange={setScannerOpen}
+        existingIsbns={existingIsbns}
+        onBookScanned={async (scanned) => {
+          if (!userId) {
+            toast.error("Sign in to add books.");
+            return;
+          }
+          // Check dedupe
+          const normalizedIsbn = scanned.isbn13 || scanned.isbn;
+          if (normalizedIsbn && existingIsbns.has(normalizedIsbn.replace(/[^0-9xX]/g, ""))) {
+            toast.info("This book is already in your library.");
+            return;
+          }
+          // Pre-fill and insert
+          const newBook: any = {
+            title: scanned.title,
+            author: scanned.author,
+            genre: scanned.genre || "",
+            series_name: null,
+            is_first_in_series: false,
+            status: "tbr",
+            isbn: scanned.isbn || null,
+            isbn13: scanned.isbn13 || null,
+            description: scanned.description || null,
+            page_count: scanned.page_count,
+            published_year: scanned.published_year,
+            thumbnail: scanned.thumbnail || null,
+            cover_url: scanned.thumbnail || null,
+            user_id: userId,
+          };
+          setAddBookDialogOpen(true);
+          setTitle(scanned.title);
+          setAuthor(scanned.author);
+          setGenre(scanned.genre || "");
+          setStatus("tbr");
+          toast.success(`Found "${scanned.title}" — review and save.`);
+        }}
+      />
     </main>
   );
 };
