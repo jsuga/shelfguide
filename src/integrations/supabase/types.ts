@@ -17,6 +17,7 @@ export type Database = {
       books: {
         Row: {
           author: string
+          comment_visibility: string
           cover_cache_error: string | null
           cover_cache_status: string | null
           cover_cached_at: string | null
@@ -51,6 +52,7 @@ export type Database = {
         }
         Insert: {
           author: string
+          comment_visibility?: string
           cover_cache_error?: string | null
           cover_cache_status?: string | null
           cover_cached_at?: string | null
@@ -85,6 +87,7 @@ export type Database = {
         }
         Update: {
           author?: string
+          comment_visibility?: string
           cover_cache_error?: string | null
           cover_cache_status?: string | null
           cover_cached_at?: string | null
@@ -278,6 +281,36 @@ export type Database = {
         }
         Relationships: []
       }
+      friendships: {
+        Row: {
+          addressee_user_id: string
+          created_at: string
+          id: string
+          requester_user_id: string
+          responded_at: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          addressee_user_id: string
+          created_at?: string
+          id?: string
+          requester_user_id: string
+          responded_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          addressee_user_id?: string
+          created_at?: string
+          id?: string
+          requester_user_id?: string
+          responded_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       import_logs: {
         Row: {
           created_at: string | null
@@ -340,7 +373,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      are_friends: {
+        Args: { user_a: string; user_b: string }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never

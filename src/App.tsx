@@ -15,6 +15,7 @@ import Preferences from "./pages/Preferences";
 import TbrWheel from "./pages/TbrWheel";
 import Community from "./pages/Community";
 import PublicProfile from "./pages/PublicProfile";
+import Friends from "./pages/Friends";
 import ResetPassword from "./pages/ResetPassword";
 import NotFound from "./pages/NotFound";
 
@@ -63,6 +64,7 @@ const App = () => (
                 <Route path="/preferences" element={<Preferences />} />
                 <Route path="/community" element={<Community />} />
                 <Route path="/u/:username" element={<PublicProfile />} />
+                <Route path="/friends" element={<Friends />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
